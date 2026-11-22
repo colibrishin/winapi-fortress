@@ -194,6 +194,7 @@ namespace
 }
 
 void run_sim_core_tests();  // SimCoreTests.cpp
+void run_sim_move_tests();  // SimMoveTests.cpp
 
 int main()
 {
@@ -201,6 +202,7 @@ int main()
 	test_property_table();
 	test_sim_damage_matches_server();
 	run_sim_core_tests();
+	run_sim_move_tests();
 
 	std::cout << (SimTests::g_checked - SimTests::g_failed) << "/" << SimTests::g_checked
 		<< " checks passed" << std::endl;

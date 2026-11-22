@@ -134,6 +134,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="SimCoreTests.cpp" />
+    <ClCompile Include="SimMoveTests.cpp" />
     <ClCompile Include="SimTests.cpp" />
   </ItemGroup>
   <ItemGroup>
