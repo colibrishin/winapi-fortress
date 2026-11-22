@@ -157,6 +157,7 @@ namespace Fortress::Network::Server
 			input.kind = request.prj_type == eProjectileType::Sub ? Sim::ShotKind::Sub : Sim::ShotKind::Main;
 			input.charge = std::clamp(request.charged, 0.0f, Sim::max_charge);
 			input.wind = m_wind;
+			input.aim_degree = request.aim_degree;  // clamped by simulate_shot
 
 			// Items are reusable on purpose (test cheat), so only check the
 			// player has the item equipped.

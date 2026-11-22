@@ -74,7 +74,8 @@ namespace Fortress::Network::Client::Object
 			get_projectile_type(),
 			item ? item->get_item_type() : eItemType::None,
 			get_charged_power(),
-			get_offset().get_x());
+			get_offset().get_x(),
+			get_aim_degree());
 
 		// Items are reusable (test cheat): only disarm it for this shot.
 		if (item)

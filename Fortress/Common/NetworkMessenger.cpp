@@ -184,7 +184,8 @@ namespace Fortress::Network
 	}
 
 	void NetworkMessenger::send_shot_request(
-		const eProjectileType prj_type, const eItemType item, const float charged, const float facing)
+		const eProjectileType prj_type, const eItemType item, const float charged, const float facing,
+		const float aim_degree)
 	{
 		ShotRequestMsg msg{};
 		msg.type = eMessageType::ShotRequest;
@@ -195,6 +196,7 @@ namespace Fortress::Network
 		msg.item = item;
 		msg.charged = charged;
 		msg.facing = facing;
+		msg.aim_degree = aim_degree;
 
 		m_pending_shot_request = create_prewritten_network_message<ShotRequestMsg>(msg);
 		m_shot_request_pending = true;

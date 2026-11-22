@@ -331,6 +331,7 @@ namespace
 		down.shooter = 1;
 		down.charge = 50.0f;
 		down.volleys = 2;
+		down.aim_degree = 0.0f;  // clamped to the cannon's lowest aim (10 degrees)
 		const ShotResult s = simulate_shot(suicide, down);
 
 		check(count(s, ShotEventType::Death, 1) == 1, "shooter killed by its own blast");
@@ -374,11 +375,145 @@ namespace
 
 		// Golden value for this scenario. If the simulation is changed on
 		// purpose, update it and say why in the commit message.
-		constexpr uint32_t golden = 0xf352e771u;
+		// 0xe9783883: parabolic trajectory with aim angle (shot_max_speed,
+		// shot_gravity, shot_wind_acceleration, default aim 45 degrees).
+		constexpr uint32_t golden = 0xe9783883u;
 		if (!check(h1 == golden, "desert shot matches the golden hash"))
 		{
 			std::cout << "  actual hash 0x" << std::hex << h1 << std::dec << ", end tick " << r1.end_tick << std::endl;
 		}
+	}
+}
+
+namespace
+{
+	// Launch from (0, 0) with no ground; returns where the projectile comes
+	// back down to its launch height (interpolated between path samples).
+	struct Flight
+	{
+		Vec2 start;
+		float range = 0.0f;
+		float seconds = 0.0f;
+		float apex = 0.0f;
+	};
+
+	Flight fly(const CharacterType type, const ShotKind kind, const float charge, const float aim, const int wind,
+	           const float facing = 1.0f, const float pitch = 0.0f)
+	{
+		SimWorld w;
+		w.map_height = 2000.0f;
+		SimCharacter ch;
+		ch.id = 1;
+		ch.type = type;
+		ch.facing = facing;
+		ch.pitch = pitch;
+		w.characters.push_back(ch);
+
+		ShotInput input;
+		input.shooter = 1;
+		input.kind = kind;
+		input.charge = charge;
+		input.aim_degree = aim;
+		input.wind = wind;
+		const ShotResult r = simulate_shot(w, input);
+
+		Flight f;
+		f.start = r.path.front().position;
+		for (size_t i = 1; i < r.path.size(); ++i)
+		{
+			const auto& a = r.path[i - 1];
+			const auto& b = r.path[i];
+			f.apex = std::max(f.apex, f.start.y - b.position.y);
+			if (a.position.y <= f.start.y && b.position.y > f.start.y && i > 1)
+			{
+				const float t = (f.start.y - a.position.y) / (b.position.y - a.position.y);
+				f.range = a.position.x + (b.position.x - a.position.x) * t - f.start.x;
+				f.seconds = (a.tick + (b.tick - a.tick) * t) * tick_seconds;
+				break;
+			}
+		}
+		return f;
+	}
+
+	// Expected values from the closed form of p(t) = p0 + v0 t + a t^2 / 2:
+	// v = shot_max_speed * scale * charge / max_charge, flight time
+	// T = 2 v sin(theta) / g, range = v cos(theta) T + wind_acc T^2 / 2.
+	void test_parabola_and_aim()
+	{
+		const float pi = 3.14159265f;
+		const float v = shot_max_speed;  // cannon main: launch_scale 1, full charge
+		const float g = shot_gravity;
+
+		const auto expect = [&](const float aim_deg, const int wind, float& range, float& seconds, float& apex)
+		{
+			const float th = aim_deg * pi / 180.0f;
+			seconds = 2.0f * v * std::sin(th) / g;
+			range = v * std::cos(th) * seconds + 0.5f * wind * shot_wind_acceleration * seconds * seconds;
+			apex = (v * std::sin(th)) * (v * std::sin(th)) / (2.0f * g);
+		};
+
+		float range, seconds, apex;
+		expect(45.0f, 0, range, seconds, apex);
+		const Flight f45 = fly(CharacterType::Cannon, ShotKind::Main, max_charge, 45.0f, 0);
+		check(std::fabs(f45.range - range) < 2.0f, "45 degree full charge range = v^2/g");
+		check(std::fabs(f45.seconds - seconds) < 0.02f, "45 degree flight time = 2 v sin / g");
+		check(std::fabs(f45.apex - apex) < 3.0f, "apex height = (v sin)^2 / 2g");
+		check(f45.range > 1100.0f && f45.seconds > 2.0f && f45.seconds < 3.0f,
+			"full charge at 45 degrees crosses the desert map in 2-3 s");
+
+		expect(45.0f, 50, range, seconds, apex);
+		const Flight windy = fly(CharacterType::Cannon, ShotKind::Main, max_charge, 45.0f, 50);
+		check(std::fabs(windy.range - range) < 2.0f, "wind adds wind_acc T^2 / 2");
+		check(windy.range - f45.range > 250.0f && windy.range - f45.range < 350.0f, "strongest wind moves the landing by ~300 px");
+
+		const Flight half = fly(CharacterType::Cannon, ShotKind::Main, max_charge / 2.0f, 45.0f, 0);
+		check(std::fabs(half.range - f45.range / 4.0f) < 2.0f, "half charge flies a quarter of the range");
+
+		const Flight low = fly(CharacterType::Cannon, ShotKind::Main, max_charge, 20.0f, 0);
+		const Flight high = fly(CharacterType::Cannon, ShotKind::Main, max_charge, 70.0f, 0);
+		check(std::fabs(low.range - high.range) < 5.0f && high.seconds > low.seconds * 2.0f,
+			"20 and 70 degrees land together, the high shot later");
+
+		const Flight below = fly(CharacterType::Cannon, ShotKind::Main, max_charge, 0.0f, 0);
+		const Flight at_min = fly(CharacterType::Cannon, ShotKind::Main, max_charge, aim_range(CharacterType::Cannon).min, 0);
+		check(std::fabs(below.range - at_min.range) < 0.01f, "aim below the range is clamped to the minimum");
+
+		const Flight nan_aim = fly(CharacterType::Cannon, ShotKind::Main, max_charge, std::nanf(""), 0);
+		check(std::fabs(nan_aim.range - f45.range) < 0.01f, "non-finite aim uses the start angle (45 for the cannon)");
+
+		const Flight left = fly(CharacterType::Cannon, ShotKind::Main, max_charge, 45.0f, 0, -1.0f);
+		check(std::fabs(left.range + f45.range) < 0.01f, "facing left mirrors the shot");
+
+		// On a slope the aim is measured from the barrel: pitch -0.2 rad
+		// (uphill) and aim 45 fires like aim 45 + 11.46 on flat ground.
+		const Flight sloped = fly(CharacterType::Cannon, ShotKind::Main, max_charge, 45.0f, 0, 1.0f, -0.2f);
+		expect(45.0f + 0.2f * 180.0f / pi, 0, range, seconds, apex);
+		check(std::fabs(sloped.seconds - seconds) < 0.03f, "aim is added to the barrel slope");
+
+		// A slow guided missile locked on a tank above it must still reach
+		// it (it used to hover under the target until the 30 s limit).
+		{
+			SimWorld w;
+			w.map_height = 2000.0f;
+			SimCharacter shooter;
+			shooter.id = 1;
+			shooter.type = CharacterType::Missile;
+			SimCharacter target;
+			target.id = 2;
+			target.position = {60.0f, -120.0f};
+			w.characters = {shooter, target};
+
+			ShotInput input;
+			input.shooter = 1;
+			input.kind = ShotKind::Sub;
+			input.charge = min_charge;
+			input.aim_degree = 60.0f;
+			const ShotResult r = simulate_shot(w, input);
+			check(!r.timed_out && count(r, ShotEventType::Damage, 2) == 1, "slow guided missile reaches a target above it");
+		}
+
+		const Flight sub = fly(CharacterType::Cannon, ShotKind::Sub, max_charge, 45.0f, 0);
+		check(std::fabs(sub.range - f45.range * 1.1f * 1.1f) < 3.0f, "launch_scale scales the speed (range by its square)");
 	}
 }
 
@@ -392,6 +527,7 @@ void run_sim_core_tests()
 	test_guided_missile();
 	test_teleport_and_self_kill();
 	test_desert_golden();
+	test_parabola_and_aim();
 }
 
 #if defined(_WINDOWS_) || defined(_WINSOCK2API_) || defined(_WINSOCKAPI_) || defined(_GDIPLUS_H)

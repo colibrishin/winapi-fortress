@@ -97,8 +97,13 @@ namespace Fortress::Object
 		void force_update_mask();
 
 		void unsafe_set_destroyed(const int x, const int y);
+	public:
+		// Same value as Sim::SimGround::checksum for the same terrain (FNV-1a
+		// over width, height and the destroyed flag of each pixel, row by row).
+		uint32_t terrain_checksum() const;
+	protected:
 		void unsafe_set_destroyed_visual(const int x, const int y);
-		void safe_set_circle_destroyed(const Math::Vector2& center_position, const int radius);
+		void safe_set_circle_destroyed(const Math::Vector2& center_position, float radius);
 		Math::Vector2 safe_orthogonal_surface_local(
 			const Math::Vector2& local_position,
 			const int depth) const;
@@ -243,6 +248,19 @@ namespace Fortress::Object
 		return GroundState::OutOfBound;
 	}
 
+	inline uint32_t Ground::terrain_checksum() const
+	{
+		uint32_t h = 2166136261u;
+		const auto mix = [&h](const uint32_t v) { h = (h ^ v) * 16777619u; };
+		mix(static_cast<uint32_t>(m_hitbox.get_x()));
+		mix(static_cast<uint32_t>(m_hitbox.get_y()));
+		for (const auto& [key, state] : m_destroyed_table)
+		{
+			mix(state == GroundState::Destroyed ? 1u : 0u);
+		}
+		return h;
+	}
+
 	inline void Ground::unsafe_set_destroyed(const int x, const int y)
 	{
 		std::lock_guard _(map_write_lock);
@@ -255,49 +273,35 @@ namespace Fortress::Object
 		SetPixel(m_mask_hdc, x, y, RGB(0, 0, 0));
 	}
 
-	inline void Ground::safe_set_circle_destroyed(const Math::Vector2& center_position, const int radius)
+	// Destroys every pixel whose centre lies inside the circle
+	// (dx^2 + dy^2 <= r^2), the same rule as Sim::SimGround::destroy_circle
+	// on the server.
+	inline void Ground::safe_set_circle_destroyed(const Math::Vector2& center_position, const float radius)
 	{
-		const Math::Vector2 start_pos = {center_position.get_x() - radius, center_position.get_y()};
-		Math::Vector2 curr_pos = start_pos;
-		const Math::Vector2 end_pos = {center_position.get_x() + radius, center_position.get_y()};
+		const int x0 = static_cast<int>(std::floor(center_position.get_x() - radius));
+		const int x1 = static_cast<int>(std::ceil(center_position.get_x() + radius));
+		const int y0 = static_cast<int>(std::floor(center_position.get_y() - radius));
+		const int y1 = static_cast<int>(std::ceil(center_position.get_y() + radius));
+		const float r2 = radius * radius;
 
-		float radian = 0.0f;
-		const float sin_max = Math::to_radian(180.0f);
-		const float sin_iter = sin_max / (radius * 2.0f);
-
-		while(curr_pos != end_pos)
+		for (int y = y0; y <= y1; ++y)
 		{
-			const int column_n = static_cast<int>(std::sin(radian) * static_cast<float>(radius * 2));
-
-			const int upper_size = column_n / 2 - 1;
-			const int lower_size = column_n / 2;
-
-			for(int i = 0; i < upper_size; ++i)
+			for (int x = x0; x <= x1; ++x)
 			{
-				if(static_cast<int>(curr_pos.get_x()) >= 0 && 
-					static_cast<int>(curr_pos.get_x()) < m_hitbox.get_x() && 
-					static_cast<int>(curr_pos.get_y() + i) >= 0 && 
-					static_cast<int>(curr_pos.get_y() + i) < m_hitbox.get_y())
+				if (x < 0 || x >= static_cast<int>(m_hitbox.get_x()) || y < 0 || y >= static_cast<int>(m_hitbox.get_y()))
 				{
-					unsafe_set_destroyed(curr_pos.get_x(), curr_pos.get_y() + i);
-					unsafe_set_destroyed_visual(curr_pos.get_x(), curr_pos.get_y() + i);
+					continue;
+				}
+
+				const float dx = static_cast<float>(x) + 0.5f - center_position.get_x();
+				const float dy = static_cast<float>(y) + 0.5f - center_position.get_y();
+
+				if (dx * dx + dy * dy <= r2)
+				{
+					unsafe_set_destroyed(x, y);
+					unsafe_set_destroyed_visual(x, y);
 				}
 			}
-
-			for(int i = 0; i < lower_size; ++i)
-			{
-				if(static_cast<int>(curr_pos.get_x()) >= 0 && 
-					static_cast<int>(curr_pos.get_x()) < m_hitbox.get_x() && 
-					static_cast<int>(curr_pos.get_y() - i) >= 0 && 
-					static_cast<int>(curr_pos.get_y() - i) < m_hitbox.get_y())
-				{
-					unsafe_set_destroyed(curr_pos.get_x(), curr_pos.get_y() - i);
-					unsafe_set_destroyed_visual(curr_pos.get_x(), curr_pos.get_y() - i);
-				}
-			}
-
-			radian += sin_iter;
-			curr_pos = {curr_pos.get_x() + 1, curr_pos.get_y()};
 		}
 	}
 
