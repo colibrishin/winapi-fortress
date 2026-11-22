@@ -23,8 +23,8 @@ namespace Fortress::Object
 			{}, 
 			Property::projectile_damage_getter(L"secwind", L"main"),
 			Property::projectile_radius_getter(L"secwind", L"main"),
-			1,
-			1,
+			Property::projectile_hit_count_getter(L"secwind", L"main"),
+			Property::projectile_fire_count_getter(L"secwind", L"main"),
 			Property::projectile_pen_rate_getter(L"secwind", L"main"))
 		{
 			EnergyBallProjectile::initialize();

@@ -23,8 +23,8 @@ namespace Fortress::Object
 			{}, 
 			Property::projectile_damage_getter(L"cannon", L"main"),
 			Property::projectile_radius_getter(L"cannon", L"main"),
-			1,
-			1,
+			Property::projectile_hit_count_getter(L"cannon", L"main"),
+			Property::projectile_fire_count_getter(L"cannon", L"main"),
 			Property::projectile_pen_rate_getter(L"cannon", L"main"))
 		{
 			CannonProjectile::initialize();

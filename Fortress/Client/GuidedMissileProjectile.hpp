@@ -27,8 +27,8 @@ namespace Fortress::Object
 			{}, 
 			Property::projectile_damage_getter(L"missile", L"sub"),
 			Property::projectile_radius_getter(L"missile", L"sub"),
-			1,
-			1,
+			Property::projectile_hit_count_getter(L"missile", L"sub"),
+			Property::projectile_fire_count_getter(L"missile", L"sub"),
 			Property::projectile_pen_rate_getter(L"missile", L"sub")),
 			m_bLocked(false),
 			m_bSoundPlayed(false)
