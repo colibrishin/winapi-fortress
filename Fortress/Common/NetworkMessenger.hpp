@@ -46,6 +46,9 @@ namespace Fortress::Network
 		void send_shot_request(eProjectileType prj_type, eItemType item, float charged, Math::Vector2 position, float facing, float pitch);
 		void send_position_report(Math::Vector2 position, float facing, float pitch);
 		void send_own_death();
+		// Resends the last ShotRequest until the server's result or the next
+		// turn arrives (UDP may drop it; the server ignores duplicates).
+		void resend_pending_shot_request();
 		bool pop_turn_change(TurnChangeMsg* out);
 		bool pop_shot_path(ShotPathMsg* out);
 		bool pop_shot_events(ShotEventsMsg* out);
@@ -115,6 +118,9 @@ namespace Fortress::Network
 		RoomID m_rood_id_;
 		// Latest turn announced by the server (sent with shot requests).
 		uint32_t m_turn_no = 0;
+		ShotRequestMsg m_pending_shot_request{};
+		bool m_shot_request_pending = false;
+		float m_shot_request_timer = 0.0f;
 		bool m_joined_lobby = false;
 	public:
 		std::recursive_mutex& queue_mutex = m_soc.queue_lock;

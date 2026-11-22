@@ -109,6 +109,11 @@ namespace Fortress::Network::Server
 				return;
 			}
 
+			if (!std::isfinite(position.get_x()) || !std::isfinite(position.get_y()))
+			{
+				return;
+			}
+
 			const Sim::Vec2 next{position.get_x(), position.get_y()};
 
 			if (m_known_position.count(pid) != 0)
@@ -116,7 +121,8 @@ namespace Fortress::Network::Server
 				const float dx = std::fabs(next.x - ch->position.x);
 				if (pid == m_current && m_phase == Phase::Aiming)
 				{
-					const float travel = (next - ch->position).magnitude();
+					// Only walking counts; falls are vertical.
+					const float travel = std::fabs(next.x - ch->position.x);
 					if (m_travel[pid] + travel > max_travel_per_turn)
 					{
 						return;
@@ -132,7 +138,7 @@ namespace Fortress::Network::Server
 			m_known_position.insert(pid);
 			ch->position = next;
 			ch->facing = facing < 0.0f ? -1.0f : 1.0f;
-			ch->pitch = std::clamp(pitch, -max_pitch, max_pitch);
+			ch->pitch = std::isfinite(pitch) ? std::clamp(pitch, -max_pitch, max_pitch) : 0.0f;
 		}
 
 		// A client reports that its own character fell out of the map.
@@ -142,7 +148,13 @@ namespace Fortress::Network::Server
 			{
 				ch->alive = false;
 				ch->hp = 0.0f;
-				if (pid == m_current && m_phase == Phase::Aiming)
+
+				const auto alive = std::count_if(m_world.characters.begin(), m_world.characters.end(),
+					[](const auto& c) { return c.alive; });
+
+				// The current player's fall ends the turn; the last but one
+				// player's fall ends the match.
+				if (m_phase == Phase::Aiming && (pid == m_current || alive <= 1))
 				{
 					m_next_turn_at = Clock::now();
 					m_phase = Phase::Replaying;
@@ -198,7 +210,9 @@ namespace Fortress::Network::Server
 			std::cout << "Room " << m_room << " turn " << m_turn_no << ": player " << pid << " fired, "
 				<< m_last_shot.path.size() << " path samples, " << m_last_shot.events.size() << " events, end tick "
 				<< m_last_shot.end_tick << std::endl;
-			m_shot_kind = static_cast<uint8_t>(input.teleport ? eProjectileType::Nutshell : request.prj_type);
+			m_shot_kind = static_cast<uint8_t>(
+				input.teleport ? eProjectileType::Nutshell :
+				input.kind == Sim::ShotKind::Sub ? eProjectileType::Sub : eProjectileType::Main);
 			m_phase = Phase::Replaying;
 			m_next_turn_at = now + seconds(m_last_shot.end_tick * Sim::tick_seconds + next_turn_delay_seconds);
 

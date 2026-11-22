@@ -199,8 +199,28 @@ namespace Fortress::Network
 		msg.facing = facing;
 		msg.pitch = pitch;
 
-		const auto stamped = create_prewritten_network_message<ShotRequestMsg>(msg);
-		m_soc.send_message<ShotRequestMsg>(&stamped, m_server_info);
+		m_pending_shot_request = create_prewritten_network_message<ShotRequestMsg>(msg);
+		m_shot_request_pending = true;
+		m_shot_request_timer = 0.0f;
+		m_soc.send_message<ShotRequestMsg>(&m_pending_shot_request, m_server_info);
+	}
+
+	void NetworkMessenger::resend_pending_shot_request()
+	{
+		constexpr float resend_interval = 0.25f;
+
+		if (!m_shot_request_pending || m_pending_shot_request.turn_no != m_turn_no)
+		{
+			m_shot_request_pending = false;
+			return;
+		}
+
+		m_shot_request_timer += DeltaTime::get_deltaTime();
+		if (m_shot_request_timer >= resend_interval)
+		{
+			m_shot_request_timer = 0.0f;
+			m_soc.send_message<ShotRequestMsg>(&m_pending_shot_request, m_server_info);
+		}
 	}
 
 	void NetworkMessenger::send_position_report(const Math::Vector2 position, const float facing, const float pitch)
@@ -243,6 +263,7 @@ namespace Fortress::Network
 		if (pop_message<ShotPathMsg>(eMessageType::ShotPath, -1, out, [](const ShotPathMsg*) { return true; }))
 		{
 			ack_shot_chunk(out->turn_no, false, out->chunk);
+			m_shot_request_pending = m_shot_request_pending && out->turn_no != m_pending_shot_request.turn_no;
 			return true;
 		}
 
@@ -254,6 +275,7 @@ namespace Fortress::Network
 		if (pop_message<ShotEventsMsg>(eMessageType::ShotEvents, -1, out, [](const ShotEventsMsg*) { return true; }))
 		{
 			ack_shot_chunk(out->turn_no, true, out->chunk);
+			m_shot_request_pending = m_shot_request_pending && out->turn_no != m_pending_shot_request.turn_no;
 			return true;
 		}
 

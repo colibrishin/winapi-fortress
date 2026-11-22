@@ -59,9 +59,8 @@ namespace Fortress
 			return;
 		}
 
-		receive_shot();
-		update_replay();
 		receive_turn_changes();
+		update_replay();
 
 		if (m_state == eRoundState::InProgress)
 		{
@@ -73,6 +72,11 @@ namespace Fortress
 					m_state = eRoundState::Waiting;
 				}
 			}
+		}
+
+		if (m_state == eRoundState::Waiting && !m_replaying && !m_replayed)
+		{
+			EngineHandle::get_messenger()->resend_pending_shot_request();
 		}
 
 		if (m_state == eRoundState::InProgress)
@@ -98,6 +102,10 @@ namespace Fortress
 
 	void Round::receive_turn_changes()
 	{
+		// One TurnChange at a time with the shot chunks in between, so a shot
+		// queued between two turn changes is still replayed.
+		receive_shot();
+
 		Network::TurnChangeMsg msg{};
 		while (EngineHandle::get_messenger()->pop_turn_change(&msg))
 		{
@@ -105,12 +113,23 @@ namespace Fortress
 			{
 				apply_turn_change(msg);
 			}
+
+			receive_shot();
 		}
 	}
 
 	void Round::apply_turn_change(const Network::TurnChangeMsg& msg)
 	{
-		// A turn change ends the previous shot: apply what is left of it.
+		// A turn change ends the previous shot: replay what is left of it
+		// at once (including a complete shot not started yet).
+		if (!m_replaying && !m_replayed)
+		{
+			if (const auto found = m_shots.find(m_turn_no); found != m_shots.end() && found->second.complete())
+			{
+				start_replay(found->second);
+			}
+		}
+
 		if (m_replaying)
 		{
 			m_replay_time = static_cast<float>(m_end_tick + 1) / replay_ticks_per_second;
@@ -123,6 +142,7 @@ namespace Fortress
 			previous->finish_replay();
 		}
 
+		m_shots.erase(m_shots.begin(), m_shots.upper_bound(msg.turn_no - 1));
 		m_turn_no = msg.turn_no;
 		m_wind_affect = msg.wind;
 		m_time_limit = msg.time_limit > 0.0f ? msg.time_limit : max_time;
@@ -159,87 +179,87 @@ namespace Fortress
 		m_state = eRoundState::InProgress;
 	}
 
+	bool Round::ShotBuffer::complete() const
+	{
+		return path_chunks >= 0 && static_cast<int>(path.size()) == path_chunks &&
+			static_cast<int>(events.size()) == event_chunks;
+	}
+
 	void Round::receive_shot()
 	{
 		Network::ShotPathMsg path{};
 		while (EngineHandle::get_messenger()->pop_shot_path(&path))
 		{
-			if (path.turn_no != m_turn_no || m_replayed || m_replaying)
+			if (path.turn_no < m_turn_no || path.chunk >= path.path_chunks)
 			{
 				continue;
 			}
 
-			if (path.turn_no != m_shot_turn)
-			{
-				m_shot_turn = path.turn_no;
-				m_path.clear();
-				m_events.clear();
-			}
-
-			m_shooter = path.shooter;
-			m_path_chunks = path.path_chunks;
-			m_event_chunks = path.event_chunks;
-			m_end_tick = path.end_tick;
-			m_path[path.chunk] = path;
+			auto& shot = m_shots[path.turn_no];
+			shot.shooter = path.shooter;
+			shot.path_chunks = path.path_chunks;
+			shot.event_chunks = path.event_chunks;
+			shot.end_tick = path.end_tick;
+			shot.path[path.chunk] = path;
 		}
 
 		Network::ShotEventsMsg events{};
 		while (EngineHandle::get_messenger()->pop_shot_events(&events))
 		{
-			if (events.turn_no != m_turn_no || m_replayed || m_replaying)
+			if (events.turn_no < m_turn_no || events.chunk >= events.event_chunks)
 			{
 				continue;
 			}
 
-			if (events.turn_no != m_shot_turn)
-			{
-				m_shot_turn = events.turn_no;
-				m_path.clear();
-				m_events.clear();
-			}
-
-			m_shooter = events.shooter;
-			m_path_chunks = events.path_chunks;
-			m_event_chunks = events.event_chunks;
-			m_end_tick = events.end_tick;
-			m_events[events.chunk] = events;
+			auto& shot = m_shots[events.turn_no];
+			shot.shooter = events.shooter;
+			shot.path_chunks = events.path_chunks;
+			shot.event_chunks = events.event_chunks;
+			shot.end_tick = events.end_tick;
+			shot.events[events.chunk] = events;
 		}
 
-		const bool complete = m_shot_turn == m_turn_no && m_path_chunks >= 0 &&
-			static_cast<int>(m_path.size()) == m_path_chunks &&
-			static_cast<int>(m_events.size()) == m_event_chunks;
-
-		if (complete && !m_replaying && !m_replayed)
+		if (m_replaying || m_replayed)
 		{
-			start_replay();
+			return;
+		}
+
+		if (const auto found = m_shots.find(m_turn_no); found != m_shots.end() && found->second.complete())
+		{
+			start_replay(found->second);
 		}
 	}
 
-	void Round::start_replay()
+	void Round::start_replay(ShotBuffer& shot)
 	{
 		m_replay_projectiles.clear();
 		m_replay_events.clear();
 		m_next_event = 0;
 		m_replay_time = 0.0f;
+		m_shooter = shot.shooter;
+		m_end_tick = shot.end_tick;
 
-		for (const auto& [_, chunk] : m_path)
+		for (const auto& [_, chunk] : shot.path)
 		{
-			for (int i = 0; i < chunk.count; ++i)
+			const int count = std::min<int>(chunk.count, static_cast<int>(std::size(chunk.samples)));
+			for (int i = 0; i < count; ++i)
 			{
 				m_replay_projectiles[chunk.samples[i].projectile].samples.push_back(chunk.samples[i]);
 			}
 		}
 
-		for (const auto& [_, chunk] : m_events)
+		for (const auto& [_, chunk] : shot.events)
 		{
-			m_replay_events.insert(m_replay_events.end(), chunk.events, chunk.events + chunk.count);
+			const int count = std::min<int>(chunk.count, static_cast<int>(std::size(chunk.events)));
+			m_replay_events.insert(m_replay_events.end(), chunk.events, chunk.events + count);
 		}
 
 		std::stable_sort(m_replay_events.begin(), m_replay_events.end(),
 			[](const auto& l, const auto& r) { return l.tick < r.tick; });
 
-		m_path.clear();
-		m_events.clear();
+		shot.path.clear();
+		shot.events.clear();
+		shot.path_chunks = -1;
 		m_replaying = true;
 		m_state = eRoundState::Waiting;
 

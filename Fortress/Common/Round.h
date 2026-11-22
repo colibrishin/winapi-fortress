@@ -34,6 +34,20 @@ namespace Fortress
 		const eRoundState& get_current_status() const;
 
 	private:
+		// Received chunks per turn. Chunks may arrive before their turn's
+		// TurnChange is processed; they are kept until that turn is replayed.
+		struct ShotBuffer
+		{
+			Network::PlayerID shooter = -1;
+			int path_chunks = -1;
+			int event_chunks = -1;
+			int end_tick = 0;
+			std::map<uint16_t, Network::ShotPathMsg> path;
+			std::map<uint16_t, Network::ShotEventsMsg> events;
+
+			bool complete() const;
+		};
+
 		struct ReplayProjectile
 		{
 			std::vector<Network::ShotPathMsg::Sample> samples;
@@ -45,7 +59,7 @@ namespace Fortress
 		void receive_turn_changes();
 		void apply_turn_change(const Network::TurnChangeMsg& msg);
 		void receive_shot();
-		void start_replay();
+		void start_replay(ShotBuffer& shot);
 		void update_replay();
 		void apply_event(const Network::ShotEventsMsg::Event& event);
 		void finish_replay();
@@ -64,14 +78,9 @@ namespace Fortress
 		std::weak_ptr<ObjectBase::character> m_current_player;
 		std::weak_ptr<ObjectBase::character> m_winner;
 
-		// Chunks of the current turn's shot.
-		uint32_t m_shot_turn = 0;
+		std::map<uint32_t, ShotBuffer> m_shots;
 		Network::PlayerID m_shooter = -1;
-		int m_path_chunks = -1;
-		int m_event_chunks = -1;
 		int m_end_tick = 0;
-		std::map<uint16_t, Network::ShotPathMsg> m_path;
-		std::map<uint16_t, Network::ShotEventsMsg> m_events;
 
 		// Replay state.
 		bool m_replaying = false;
