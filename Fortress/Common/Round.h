@@ -65,7 +65,7 @@ namespace Fortress
 		void finish_replay();
 		void update_camera();
 		void receive_character_state();
-		void log_prediction(uint32_t turn_no) const;
+		void log_prediction(uint32_t turn_no, uint32_t server_terrain_crc) const;
 		void follow_current_player() const;
 
 		std::shared_ptr<ObjectBase::character> find_player(Network::PlayerID pid) const;

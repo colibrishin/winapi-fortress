@@ -147,7 +147,7 @@ namespace Fortress
 		}
 
 		m_shots.erase(m_shots.begin(), m_shots.upper_bound(msg.turn_no - 1));
-		log_prediction(msg.turn_no);
+		log_prediction(msg.turn_no, msg.terrain_crc);
 		m_turn_no = msg.turn_no;
 		m_wind_affect = msg.wind;
 		m_time_limit = msg.time_limit > 0.0f ? msg.time_limit : max_time;
@@ -425,7 +425,7 @@ namespace Fortress
 
 	// With FORTRESS_AUTOPLAY_LOG set (test runs), records how far the local
 	// player's prediction was from the server's position.
-	void Round::log_prediction(const uint32_t turn_no) const
+	void Round::log_prediction(const uint32_t turn_no, const uint32_t server_terrain_crc) const
 	{
 		char* path = nullptr;
 		size_t length = 0;
@@ -436,6 +436,21 @@ namespace Fortress
 
 		std::ofstream log(path, std::ios::app);
 		free(path);
+
+		// Terrain parity with the server (same combination as RoomGame).
+		if (const auto scene = Scene::SceneManager::get_active_scene().lock())
+		{
+			uint32_t crc = 0;
+			for (const auto& ptr : scene->get_objects<Object::Ground>())
+			{
+				if (const auto ground = ptr.lock())
+				{
+					crc = crc * 31u + ground->terrain_checksum();
+				}
+			}
+			log << "turn " << turn_no << ": terrain " << (crc == server_terrain_crc ? "matches" : "DIFFERS from")
+				<< " the server" << std::endl;
+		}
 
 		for (const auto& ptr : m_all_players)
 		{

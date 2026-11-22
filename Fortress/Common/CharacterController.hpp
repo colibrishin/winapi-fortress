@@ -59,6 +59,8 @@ namespace Fortress::Controller
 		bool is_projectile_active() const;
 
 		float get_charged_power() const;
+		// Aim angle above the barrel's slope, degrees, within the tank's range.
+		float get_aim_degree() const;
 		float get_hp_percentage() const;
 		float get_mp_percentage() const;
 		float get_hp_raw() const;
@@ -145,6 +147,9 @@ namespace Fortress::Controller
 		float m_hp;
 		float m_mp;
 		float m_power;
+		float m_aim_degree;
+		float m_aim_min;
+		float m_aim_max;
 		bool m_bMovable;
 		int m_previousHitCount;
 		bool m_bDoubleDamage;

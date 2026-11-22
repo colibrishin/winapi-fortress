@@ -31,13 +31,14 @@ namespace Fortress::Sim
 
 	struct ProjectileSpec
 	{
-		Vec2 speed;      // multiplied by the charge, component-wise with the direction
+		Vec2 speed;      // client's old per-axis speed (not used by the trajectory)
 		float damage;
 		float radius;    // blast radius: terrain destruction and damage falloff
 		float penetration;
 		int max_hit_count;
 		int fire_count;  // projectiles per volley, 0.1 s apart
 		bool guided;
+		float launch_scale = 1.0f;  // launch speed relative to shot_max_speed
 	};
 
 	namespace Table = Object::Property::Table;
@@ -80,7 +81,8 @@ namespace Fortress::Sim
 				Table::nutshell_penetration,
 				Table::nutshell_hit_count,
 				Table::nutshell_fire_count,
-				false};
+				false,
+				projectile_spec(type, ShotKind::Main).launch_scale};
 		}
 
 		const auto* p = Table::find_projectile(short_name(type), kind == ShotKind::Main ? L"main" : L"sub");
@@ -93,8 +95,27 @@ namespace Fortress::Sim
 		// Homing is behaviour of GuidedMissileProjectile, the missile's sub shot.
 		const bool guided = type == CharacterType::Missile && kind == ShotKind::Sub;
 
-		return {{p->speed_x, p->speed_y}, p->damage, p->radius, p->penetration, p->hit_count, p->fire_count, guided};
+		return {{p->speed_x, p->speed_y}, p->damage, p->radius, p->penetration, p->hit_count, p->fire_count, guided,
+			p->launch_scale};
 	}
+
+	// Aim range of a character, degrees above the barrel's slope.
+	struct AimRange
+	{
+		float min;
+		float max;
+		float start;
+	};
+
+	inline AimRange aim_range(const CharacterType type)
+	{
+		const auto* c = Table::find_character(short_name(type));
+		return c ? AimRange{c->aim_min, c->aim_max, c->aim_start} : AimRange{45.0f, 45.0f, 45.0f};
+	}
+
+	constexpr float shot_max_speed = Table::shot_max_speed;
+	constexpr float shot_gravity = Table::shot_gravity;
+	constexpr float shot_wind_acceleration = Table::shot_wind_acceleration;
 
 	inline float character_armor(const CharacterType type)
 	{

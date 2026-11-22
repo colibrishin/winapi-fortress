@@ -211,6 +211,38 @@ namespace Fortress::ObjectBase
 		DeleteObject(brush);
 	}
 
+	// Aim line from the top of the tank in the firing direction (the same
+	// direction as Sim::Detail::muzzle) and the angle in degrees.
+	void character::render_aim(const Math::Vector2& position)
+	{
+		constexpr float length = 60.0f;
+		const float pitch = get_movement_pitch_radian();
+		const float aim = Math::to_radian(get_aim_degree());
+		const bool left = get_offset() == Math::left;
+		const Math::Vector2 direction = left
+			? Math::Vector2{-std::cos(pitch + aim), -std::sin(pitch + aim)}
+			: Math::Vector2{std::cos(pitch - aim), std::sin(pitch - aim)};
+
+		const Math::Vector2 start = position + Math::Vector2{m_hitbox.get_x() / 2, 0.0f};
+		const Math::Vector2 end = start + direction * length;
+
+		const HDC dc = EngineHandle::get_handle().lock()->get_buffer_dc();
+		const HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 0));
+		const HGDIOBJ previous = SelectObject(dc, pen);
+		MoveToEx(dc, static_cast<int>(start.get_x()), static_cast<int>(start.get_y()), nullptr);
+		LineTo(dc, static_cast<int>(end.get_x()), static_cast<int>(end.get_y()));
+		SelectObject(dc, previous);
+		DeleteObject(pen);
+
+		const std::wstring text = std::to_wstring(static_cast<int>(std::lround(get_aim_degree()))) + L"\u00b0";
+		const int previous_mode = SetBkMode(dc, TRANSPARENT);
+		const COLORREF previous_color = SetTextColor(dc, RGB(255, 255, 0));
+		TextOutW(dc, static_cast<int>(end.get_x()) + (left ? -30 : 4), static_cast<int>(end.get_y()) - 8,
+			text.c_str(), static_cast<int>(text.size()));
+		SetTextColor(dc, previous_color);
+		SetBkMode(dc, previous_mode);
+	}
+
 	void character::render()
 	{
 		Math::Vector2 pos{};
@@ -234,6 +266,11 @@ namespace Fortress::ObjectBase
 			render_hp_bar(pos);
 			
 			m_current_sprite.lock()->render(pos, m_hitbox, {1, 1}, Math::to_degree(get_movement_pitch_radian()));
+
+			if (is_movable_localplayer())
+			{
+				render_aim(pos);
+			}
 
 			// c
 			Debug::draw_line(pos, camera_ptr->get_offset());

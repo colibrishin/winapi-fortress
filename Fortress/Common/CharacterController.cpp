@@ -7,14 +7,17 @@
 #include "input.hpp"
 #include "GifWrapper.h"
 #include "item.hpp"
+#include "PropertyTable.hpp"
 
 #undef max
+#undef min
 
 namespace Fortress::Controller
 {
 	void CharacterController::initialize()
 	{
 		stateController::initialize();
+
 		set_current_sprite(eCharacterState::Idle);
 		set_state(eCharacterState::Idle);
 	}
@@ -202,6 +205,11 @@ namespace Fortress::Controller
 		return m_power;
 	}
 
+	float CharacterController::get_aim_degree() const
+	{
+		return m_aim_degree;
+	}
+
 	float CharacterController::get_hp_percentage() const
 	{
 		if(m_hp <= 0.0f)
@@ -287,6 +295,9 @@ namespace Fortress::Controller
 		m_hp(hp),
 		m_mp(mp),
 		m_power(1.0f),
+		m_aim_degree(45.0f),
+		m_aim_min(45.0f),
+		m_aim_max(45.0f),
 		m_bMovable(false),
 		m_previousHitCount(),
 		m_bDoubleDamage(false),
@@ -294,6 +305,12 @@ namespace Fortress::Controller
 		m_projectile_type(eProjectileType::Main),
 		m_tmp_projectile_type(eProjectileType::Main)
 	{
+		if (const auto* entry = Object::Property::Table::find_character(short_name))
+		{
+			m_aim_min = entry->aim_min;
+			m_aim_max = entry->aim_max;
+			m_aim_degree = entry->aim_start;
+		}
 	}
 
 	void CharacterController::set_sprite_offset(const std::wstring& name, const std::wstring& orientation,
@@ -486,6 +503,13 @@ namespace Fortress::Controller
 			else if (Input::getKey(eKeyCode::SPACE))
 			{
 				set_state(eCharacterState::Firing);
+			}
+			else if (Input::getKey(eKeyCode::UP) || Input::getKey(eKeyCode::DOWN))
+			{
+				// Aim: Up raises, Down lowers, within the tank's range.
+				const float step = Object::Property::Table::aim_degrees_per_second * DeltaTime::get_deltaTime();
+				m_aim_degree += Input::getKey(eKeyCode::UP) ? step : -step;
+				m_aim_degree = std::min(m_aim_max, std::max(m_aim_min, m_aim_degree));
 			}
 			else if (Input::getKeyDown(eKeyCode::TAB) && !m_active_item.lock())
 			{

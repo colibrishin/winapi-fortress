@@ -383,6 +383,7 @@ namespace
 		msg.item = item;
 		msg.charged = charge;
 		msg.facing = 1.0f;
+		msg.aim_degree = 45.0f;
 		return msg;
 	}
 
@@ -590,6 +591,42 @@ namespace
 		return true;
 	}
 
+	// The server fires at the requested aim angle: a high shot stays in the
+	// air much longer than a low one with the same charge.
+	bool scenario_aim()
+	{
+		constexpr RoomID room = 12;
+		ScriptClient p1(61171);
+		ScriptClient p2(61181);
+		if (!start_match(p1, p2, room, eCharacterType::CannonCharacter)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+
+		// Turn 1: p1 (cannon) fires low; turn 2: p2 (cannon) fires high.
+		auto low_request = shot_request(room, 1, 1, 150.0f);
+		low_request.aim_degree = 10.0f;
+		p1.send(low_request);
+		ReceivedShot low;
+		if (!collect_shot(p1, 1, room, 1, low)) return fail("p1's shot did not arrive");
+		collect_shot(p2, 2, room, 1, low, 500);
+
+		const int low_ticks = low.path.begin()->second.end_tick;
+		if (!wait_turn(p2, 2, room, 2, &turn, low_ticks * 1000 / 60 + 4000)) return fail("no turn 2");
+		wait_turn(p1, 1, room, 2, &turn, 500);
+
+		auto high_request = shot_request(room, 2, 2, 150.0f);
+		high_request.aim_degree = 70.0f;
+		high_request.facing = -1.0f;
+		p2.send(high_request);
+		ReceivedShot high;
+		if (!collect_shot(p2, 2, room, 2, high)) return fail("p2's shot did not arrive");
+
+		const int high_ticks = high.path.begin()->second.end_tick;
+		std::cout << "end tick: aim 10 -> " << low_ticks << ", aim 70 -> " << high_ticks << std::endl;
+		return high_ticks * 2 > low_ticks * 3 || fail("the aim angle was not applied");
+	}
+
 	// Characters start where BattleScene::spawnpoints puts them.
 	bool scenario_spawn()
 	{
@@ -790,6 +827,7 @@ namespace
 		{"fall-death", scenario_fall_death},
 		{"spawn", scenario_spawn},
 		{"walk", scenario_walk},
+		{"aim", scenario_aim},
 		{"turn-timeout", scenario_turn_timeout},
 		{"smoke", scenario_smoke},
 		{"spoof-room-slot", scenario_spoof_room_slot},

@@ -20,6 +20,9 @@ namespace Fortress::Object::Property::Table
 		float penetration;
 		int hit_count;   // explosions before the projectile is removed
 		int fire_count;  // projectiles per shot, 0.1 s apart
+		// Launch speed relative to shot_max_speed (server trajectory).
+		// speed_x/speed_y above are the client's old per-axis speeds.
+		float launch_scale;
 	};
 
 	struct ProjectileEntry
@@ -31,25 +34,33 @@ namespace Fortress::Object::Property::Table
 
 	// Base speed {1, 2} scaled per projectile.
 	inline constexpr ProjectileEntry projectiles[] = {
-		{L"cannon", L"main", {1.0f, 2.0f, 10.0f, 50.0f, 0.9f, 1, 1}},
-		{L"cannon", L"sub", {2.0f, 4.0f, 25.0f, 15.0f, 1.0f, 1, 1}},
-		{L"missile", L"main", {1.5f, 3.0f, 10.0f, 30.0f, 0.9f, 2, 1}},
-		{L"missile", L"sub", {1.5f, 3.0f, 10.0f, 10.0f, 0.7f, 1, 1}},
-		{L"secwind", L"main", {1.5f, 3.0f, 30.0f, 30.0f, 0.7f, 1, 1}},
-		{L"secwind", L"sub", {2.0f, 4.0f, 10.0f, 10.0f, 0.5f, 1, 3}},
+		{L"cannon", L"main", {1.0f, 2.0f, 10.0f, 50.0f, 0.9f, 1, 1, 1.0f}},
+		{L"cannon", L"sub", {2.0f, 4.0f, 25.0f, 15.0f, 1.0f, 1, 1, 1.1f}},
+		{L"missile", L"main", {1.5f, 3.0f, 10.0f, 30.0f, 0.9f, 2, 1, 1.0f}},
+		{L"missile", L"sub", {1.5f, 3.0f, 10.0f, 10.0f, 0.7f, 1, 1, 1.05f}},
+		{L"secwind", L"main", {1.5f, 3.0f, 30.0f, 30.0f, 0.7f, 1, 1, 0.95f}},
+		{L"secwind", L"sub", {2.0f, 4.0f, 10.0f, 10.0f, 0.5f, 1, 3, 1.1f}},
 	};
 
 	struct CharacterEntry
 	{
 		const wchar_t* short_name;
 		float armor;
+		// Aim angle above the barrel's slope, degrees (tuning values, not
+		// taken from the original game).
+		float aim_min;
+		float aim_max;
+		float aim_start;
 	};
 
 	inline constexpr CharacterEntry characters[] = {
-		{L"cannon", 0.5f},
-		{L"missile", 1.0f},
-		{L"secwind", 0.7f},
+		{L"cannon", 0.5f, 10.0f, 70.0f, 45.0f},
+		{L"missile", 1.0f, 20.0f, 60.0f, 40.0f},
+		{L"secwind", 0.7f, 30.0f, 80.0f, 55.0f},
 	};
+
+	// Aim change per second while Up/Down is held.
+	inline constexpr float aim_degrees_per_second = 30.0f;
 
 	inline constexpr float character_hitbox[2] = {50.0f, 50.0f};
 	inline constexpr float projectile_hitbox[2] = {30.0f, 30.0f};
@@ -60,8 +71,18 @@ namespace Fortress::Object::Property::Table
 	// Charge used when the player fires without charging (character::fire).
 	inline constexpr float character_min_charge = 10.0f;
 
-	// Gravitational acceleration in px/s^2 (Math::G_ACC).
+	// Gravitational acceleration in px/s^2 (Math::G_ACC). Characters fall
+	// with it (client movement, ported as-is to Sim/SimMove.hpp).
 	inline constexpr float gravity_acceleration = 9.80f * 1.5f;
+
+	// Projectile trajectory (server, Sim/SimShot.hpp): a parabola
+	// p(t) = p0 + v0*t + (wind, g)*t^2/2. Chosen so that a full-charge 45
+	// degree shot without wind flies about 1200 px (the desert map is
+	// 1100 px wide) in about 2.5 s, and the strongest wind (50) moves the
+	// landing point by about 300 px.
+	inline constexpr float shot_max_speed = 680.0f;      // px/s at max charge, launch_scale 1
+	inline constexpr float shot_gravity = 385.0f;        // px/s^2
+	inline constexpr float shot_wind_acceleration = 2.0f; // px/s^2 per wind unit
 
 	// Nutshell (Teleport item): flies at the shooter's main projectile speed,
 	// does no damage and only marks where the shooter lands.

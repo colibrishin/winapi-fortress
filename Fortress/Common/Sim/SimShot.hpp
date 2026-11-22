@@ -96,6 +96,7 @@ namespace Fortress::Sim
 		int volleys = 1;          // 2 with the DoubleShot item
 		bool double_damage = false;
 		bool teleport = false;    // Teleport item: shooter moves to where the nutshell lands
+		float aim_degree = 45.0f; // above the barrel's slope; clamped to the shooter's aim range
 	};
 
 	enum class ShotEventType : uint8_t
@@ -144,10 +145,8 @@ namespace Fortress::Sim
 			int id = 0;
 			ProjectileSpec spec{};
 			Vec2 position;
-			Vec2 direction;       // rigidBody::m_velocity
-			Vec2 current_speed;   // rigidBody::m_curr_speed
-			float gravity_speed = 0.0f;
-			float wind = 0.0f;
+			Vec2 velocity;        // px/s
+			Vec2 acceleration;    // (wind, gravity), px/s^2
 			int hit_count = 0;
 			int ticks_since_hit = 0;
 			bool active = true;
@@ -160,12 +159,17 @@ namespace Fortress::Sim
 			}
 		};
 
-		// Direction and muzzle position, as character::fire and
-		// character::initialize_projectile compute them.
-		inline void muzzle(const SimCharacter& shooter, Vec2& position, Vec2& direction)
+		// Launch direction and muzzle position. The muzzle sits where
+		// character::initialize_projectile puts it; the direction is the
+		// facing turned by the barrel's slope (pitch) and then raised by the
+		// aim angle (screen y grows downward).
+		inline void muzzle(const SimCharacter& shooter, const float aim_degree, Vec2& position, Vec2& direction)
 		{
 			const float p = shooter.pitch;
-			direction = Vec2{std::cos(p), std::sin(p)} * shooter.facing;
+			const float a = aim_degree * 3.14159265f / 180.0f;
+			direction = shooter.facing < 0.0f
+				? Vec2{-std::cos(p + a), -std::sin(p + a)}
+				: Vec2{std::cos(p - a), std::sin(p - a)};
 
 			const Vec2 top_forward = shooter.position + Vec2{shooter.facing, -1.0f} * (character_hitbox * 0.5f);
 			const Vec2 forward = Vec2{shooter.facing, -1.0f} * projectile_hitbox;
@@ -228,6 +232,12 @@ namespace Fortress::Sim
 		const CharacterType shooter_type = shooter->type;
 		const ProjectileSpec spec = projectile_spec(shooter_type, input.kind);
 		const float charge = std::min(max_charge, std::max(min_charge, input.charge));
+		const AimRange aim = aim_range(shooter_type);
+		const float aim_degree = std::isfinite(input.aim_degree)
+			? std::min(aim.max, std::max(aim.min, input.aim_degree))
+			: aim.start;
+		const float launch_speed = shot_max_speed * spec.launch_scale * charge / max_charge;
+		const Vec2 acceleration{static_cast<float>(input.wind) * shot_wind_acceleration, shot_gravity};
 
 		std::vector<Projectile> projectiles;
 		int volleys_fired = 0;
@@ -338,9 +348,10 @@ namespace Fortress::Sim
 					Projectile prj;
 					prj.id = static_cast<int>(projectiles.size());
 					prj.spec = spec;
-					Detail::muzzle(*shooter, prj.position, prj.direction);
-					prj.current_speed = spec.speed * charge;
-					prj.wind = static_cast<float>(input.wind);
+					Vec2 direction;
+					Detail::muzzle(*shooter, aim_degree, prj.position, direction);
+					prj.velocity = direction * launch_speed;
+					prj.acceleration = acceleration;
 					projectiles.push_back(prj);
 
 					emit(ShotEventType::Spawn, prj.id, shooter->id, prj.position);
@@ -371,7 +382,7 @@ namespace Fortress::Sim
 				// boundary is within range of the leading bottom corner.
 				if (prj.spec.guided)
 				{
-					const bool going_left = prj.direction.x < 0.0f;
+					const bool going_left = prj.velocity.x < 0.0f;
 					const Box b = prj.box();
 					const Vec2 lead = going_left ? Vec2{b.top_left().x, b.bottom_right().y} : b.bottom_right();
 
@@ -397,7 +408,8 @@ namespace Fortress::Sim
 					{
 						const Box t = nearest->box();
 						const Vec2 target = going_left ? Vec2{t.top_left().x, t.bottom_right().y} : t.bottom_right();
-						prj.direction = (target - lead).normalized();
+						// Turn toward the target, keeping the speed.
+						prj.velocity = (target - lead).normalized() * prj.velocity.magnitude();
 					}
 				}
 
@@ -421,15 +433,10 @@ namespace Fortress::Sim
 					continue;
 				}
 
-				// Integrate (rigidBody::move, apply_gravity, projectile::flying).
-				prj.position += prj.direction * prj.current_speed * tick_seconds;
-
-				prj.gravity_speed += gravity * tick_seconds * 0.5f;
-				prj.position.y += prj.gravity_speed * tick_seconds;
-				prj.gravity_speed += gravity * tick_seconds * 0.5f;
-
-				const bool with_wind = (prj.direction.x < 0.0f) == (prj.wind < 0.0f);
-				prj.current_speed.x += (with_wind ? 1.0f : -1.0f) * std::fabs(prj.wind) * tick_seconds;
+				// Parabola under constant acceleration (exact per tick):
+				// p += v*dt + a*dt^2/2, v += a*dt.
+				prj.position += prj.velocity * tick_seconds + prj.acceleration * (0.5f * tick_seconds * tick_seconds);
+				prj.velocity += prj.acceleration * tick_seconds;
 
 				if (prj.position.y > world.map_height + out_of_bounds_margin)
 				{

@@ -306,6 +306,7 @@ namespace Fortress::Network
 		eItemType item;
 		float charged;
 		float facing;  // +1 right, -1 left: a quick turn may not reach the server's walk
+		float aim_degree;  // above the barrel's slope; the server clamps it to the tank's range
 	};
 
 	// Client -> server: held movement key (0 none, 1 left, 2 right). Sent on
