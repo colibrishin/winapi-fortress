@@ -2,6 +2,7 @@
 #include "NutshellProjectile.hpp"
 #include "../Common/character.hpp"
 #include "../Common/item.hpp"
+#include "../Common/input.hpp"
 
 namespace Fortress::Network::Client::Object
 {
@@ -13,11 +14,9 @@ namespace Fortress::Network::Client::Object
 		void update() override;
 
 	private:
-		void send_move() const;
-		void send_stop() const;
 		void send_firing() const;
 		void request_shot() override;
-		void send_position_report();
+		void send_move_input();
 
 		void change_projectile() override;
 		void equip_nutshell() override;
@@ -42,8 +41,8 @@ namespace Fortress::Network::Client::Object
 
 		eCharacterState m_previous_state_;
 		eCharacterState m_current_state_;
-		float m_position_report_timer = 0.0f;
-		bool m_death_reported = false;
+		uint8_t m_sent_move_input = 0;
+		float m_move_input_timer = 0.0f;
 
 		std::weak_ptr<ObjectBase::projectile> get_nutshell_projectile() override;
 	};
@@ -56,16 +55,6 @@ namespace Fortress::Network::Client::Object
 
 		update_local_player();
 		update_non_local_player();
-	}
-
-	inline void ClientCharacter::send_move() const
-	{
-		EngineHandle::get_messenger()->send_move_signal(get_position(), get_offset());
-	}
-
-	inline void ClientCharacter::send_stop() const
-	{
-		EngineHandle::get_messenger()->send_stop_signal(get_position(), get_offset());
 	}
 
 	inline void ClientCharacter::send_firing() const
@@ -84,10 +73,7 @@ namespace Fortress::Network::Client::Object
 		EngineHandle::get_messenger()->send_shot_request(
 			get_projectile_type(),
 			item ? item->get_item_type() : eItemType::None,
-			get_charged_power(),
-			get_position(),
-			get_offset().get_x(),
-			get_movement_pitch_radian());
+			get_charged_power());
 
 		// Items are reusable (test cheat): only disarm it for this shot.
 		if (item)
@@ -96,21 +82,35 @@ namespace Fortress::Network::Client::Object
 		}
 	}
 
-	// Until the server simulates movement it takes the position from the
-	// owning client (bounded on the server side).
-	inline void ClientCharacter::send_position_report()
+	// The server walks the character from the held key (A before D, as in
+	// CharacterController::idle_state); sent on change and repeated.
+	inline void ClientCharacter::send_move_input()
 	{
-		constexpr float report_interval = 0.25f;
+		constexpr float repeat_interval = 0.1f;
 
-		m_position_report_timer += DeltaTime::get_deltaTime();
-		if (m_position_report_timer < report_interval)
+		uint8_t input = 0;
+		if (is_movable_localplayer())
 		{
-			return;
+			if (Input::getKey(eKeyCode::A))
+			{
+				input = 1;
+			}
+			else if (Input::getKey(eKeyCode::D))
+			{
+				input = 2;
+			}
 		}
 
-		m_position_report_timer = 0.0f;
-		EngineHandle::get_messenger()->send_position_report(
-			get_position(), get_offset().get_x(), get_movement_pitch_radian());
+		m_move_input_timer += DeltaTime::get_deltaTime();
+		const bool changed = input != m_sent_move_input;
+		const bool repeat = is_movable_localplayer() && m_move_input_timer >= repeat_interval;
+
+		if (changed || repeat)
+		{
+			EngineHandle::get_messenger()->send_move_input(input);
+			m_sent_move_input = input;
+			m_move_input_timer = 0.0f;
+		}
 	}
 
 	inline void ClientCharacter::change_projectile()
@@ -150,40 +150,11 @@ namespace Fortress::Network::Client::Object
 			return;
 		}
 
-		const bool dead = m_current_state_ == eCharacterState::Death || m_current_state_ == eCharacterState::Dead;
-		if (dead)
-		{
-			// The server only learns a fall from the owner (hp deaths it knows).
-			if (!m_death_reported)
-			{
-				EngineHandle::get_messenger()->send_own_death();
-				m_death_reported = true;
-			}
-			return;
-		}
+		send_move_input();
 
-		send_position_report();
-
-		if (is_movable_localplayer() && has_state_changed())
+		if (is_movable_localplayer() && has_state_changed() && m_current_state_ == eCharacterState::Firing)
 		{
-			switch (m_current_state_)
-			{
-			case eCharacterState::Idle:
-			case eCharacterState::IdleLow:
-				if(m_previous_state_ != eCharacterState::TurnEnd)
-				{
-					send_stop();	
-				}
-				break;
-			case eCharacterState::Move:
-			case eCharacterState::MoveLow:
-				send_move();
-				break;
-			case eCharacterState::Firing:
-				send_firing();
-				break;
-			default: ;
-			}
+			send_firing();
 		}
 	}
 
@@ -191,32 +162,9 @@ namespace Fortress::Network::Client::Object
 	{
 		if(!is_localplayer())
 		{
-			PositionMsg position_msg{};
 			FiringMsg firing_msg{};
-			StopMsg stop_msg{};
 			ProjectileSelectMsg projectile_msg{};
 
-			if (EngineHandle::get_messenger()->get_move_signal(get_player_id(), &position_msg))
-			{
-				set_offset(position_msg.offset);
-				set_state(eCharacterState::Move);
-
-				if (get_offset() == Math::left)
-				{
-					move_left();
-				}
-				else if (get_offset() == Math::right)
-				{
-					move_right();
-				}
-			}
-			if (EngineHandle::get_messenger()->get_stop_signal(get_player_id(), &stop_msg))
-			{
-				m_position = stop_msg.position;
-				set_offset(stop_msg.offset);
-				set_state(eCharacterState::Idle);
-				stop();
-			}
 			if (EngineHandle::get_messenger()->get_projectile_select_signal(get_player_id(), &projectile_msg))
 			{
 				m_projectile_type = projectile_msg.prj_type;

@@ -74,6 +74,7 @@ namespace Fortress::Controller
 		// Server-authoritative shots: the hp comes from the server, and a
 		// replayed shot ends with the turn (projectiles removed, back to idle).
 		void set_server_hp(float hp);
+		void set_server_mp(float mp);
 		void finish_replay();
 
 	protected:

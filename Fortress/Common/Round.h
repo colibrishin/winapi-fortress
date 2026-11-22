@@ -64,6 +64,8 @@ namespace Fortress
 		void apply_event(const Network::ShotEventsMsg::Event& event);
 		void finish_replay();
 		void update_camera();
+		void receive_character_state();
+		void log_prediction(uint32_t turn_no) const;
 		void follow_current_player() const;
 
 		std::shared_ptr<ObjectBase::character> find_player(Network::PlayerID pid) const;
@@ -89,6 +91,12 @@ namespace Fortress
 		std::map<int, ReplayProjectile> m_replay_projectiles;
 		std::vector<Network::ShotEventsMsg::Event> m_replay_events;
 		size_t m_next_event = 0;
+
+		// Server movement tick of the last applied CharacterState. The
+		// server does not move anyone while a shot is replayed, so states
+		// up to the tick seen when the replay started are stale afterwards.
+		uint32_t m_state_tick = 0;
+		uint32_t m_replay_state_tick = 0;
 	};
 }
 #endif // ROUND_HPP

@@ -119,6 +119,47 @@ namespace Fortress::ObjectBase
 		m_velocity = {};
 	}
 
+	void character::apply_server_state(
+		const GlobalPosition& position, const float facing, const float pitch, const float mp, const bool moving)
+	{
+		constexpr float local_correction_distance = 8.0f;
+
+		const auto state = get_state();
+		if (state == eCharacterState::Death || state == eCharacterState::Dead)
+		{
+			return;
+		}
+
+		set_server_mp(mp);
+
+		if (is_localplayer())
+		{
+			const float deviation = (position - m_position).magnitude();
+			m_max_server_deviation = std::max(m_max_server_deviation, deviation);
+
+			if (deviation > local_correction_distance)
+			{
+				m_position = position;
+				reset_current_gravity_speed();
+				m_server_corrections++;
+			}
+			return;
+		}
+
+		m_position = position;
+		reset_current_gravity_speed();
+		set_offset(facing < 0.0f ? Math::left : Math::right);
+		set_movement_pitch_radian(pitch);
+
+		if (state == eCharacterState::Idle || state == eCharacterState::IdleLow ||
+			state == eCharacterState::Move || state == eCharacterState::MoveLow)
+		{
+			// Only the animation; the server moves the character.
+			m_velocity = {};
+			set_state(moving ? eCharacterState::Move : eCharacterState::Idle);
+		}
+	}
+
 	float character::get_armor() const
 	{
 		return m_armor;

@@ -71,9 +71,12 @@ namespace Fortress::Network
 		ShotAck = 0xA04,
 		TurnChange = 0xA05,
 		TurnAck = 0xA06,
-		// Client -> server: own position, offset = {facing, pitch}. Trusted
-		// within bounds until the server simulates movement.
-		PositionReport = 0xA07,
+		// Client -> server: the movement key the current player holds.
+		MoveInput = 0xA08,
+		// Server -> client: positions of every character (20 per second).
+		CharacterState = 0xA09,
+		// Test hook (server started with --debug-state): place a character.
+		DebugPlace = 0xA0A,
 
 		// Test harness only. The server answers these only when it was
 		// started with --debug-state.
@@ -294,18 +297,52 @@ namespace Fortress::Network
 	{
 	};
 
-	// Client -> server: the current player fires (or uses an instant item).
-	// Position, facing and pitch are reported by the client until the server
-	// simulates movement; the server bounds them.
+	// Client -> server: the current player fires (or uses an instant item)
+	// from where the server has the character.
 	struct ShotRequestMsg : Message
 	{
 		uint32_t turn_no;
 		eProjectileType prj_type;
 		eItemType item;
 		float charged;
-		Math::Vector2 position;
-		float facing;  // +1 right, -1 left
-		float pitch;   // radians
+	};
+
+	// Client -> server: held movement key (0 none, 1 left, 2 right). Sent on
+	// change and repeated; seq orders them.
+	struct MoveInputMsg : Message
+	{
+		uint32_t turn_no;
+		uint32_t seq;
+		uint8_t input;
+	};
+
+	// Server -> client: server-side state of every character.
+	struct CharacterStateMsg : Message
+	{
+		struct Entry
+		{
+			PlayerID pid;
+			float x;
+			float y;
+			float facing;
+			float pitch;
+			float velocity_x;
+			float mp;
+			uint8_t moving;
+			uint8_t alive;
+		};
+
+		uint32_t turn_no;
+		uint32_t tick;
+		uint8_t count;
+		Entry entries[15];
+	};
+
+	struct DebugPlaceMsg : Message
+	{
+		PlayerID target;
+		float x;
+		float y;
 	};
 
 	// Server -> client: one chunk of the shot's projectile path.
@@ -484,5 +521,6 @@ namespace Fortress::Network
 	static_assert(sizeof(ShotPathMsg) <= max_packet_size);
 	static_assert(sizeof(ShotEventsMsg) <= max_packet_size);
 	static_assert(sizeof(TurnChangeMsg) <= max_packet_size);
+	static_assert(sizeof(CharacterStateMsg) <= max_packet_size);
 }
 #endif // MESSAGE_HPP

@@ -625,12 +625,12 @@ namespace Fortress::Network::Server
 		case eMessageType::Stop:
 		case eMessageType::Firing:
 		case eMessageType::ProjectileSelect:
-		case eMessageType::Destroyed:
 		case eMessageType::ShotRequest:
 		case eMessageType::ShotAck:
 		case eMessageType::TurnAck:
-		case eMessageType::PositionReport:
+		case eMessageType::MoveInput:
 		case eMessageType::DebugStateReq:
+		case eMessageType::DebugPlace:
 			return true;
 		default:
 			return false;
@@ -651,7 +651,7 @@ namespace Fortress::Network::Server
 			return false;
 		}
 
-		if (type == eMessageType::DebugStateReq)
+		if (type == eMessageType::DebugStateReq || type == eMessageType::DebugPlace)
 		{
 			return debug_state_enabled;
 		}
@@ -777,8 +777,7 @@ namespace Fortress::Network::Server
 				// Keeps the session alive (authorize); does not join anything.
 				reply_ping(client_info);
 				break;
-			// Movement is still decided by the moving client (until the server
-			// simulates it); these are relayed for display only.
+			// Relayed for display only; positions come from CharacterState.
 			case eMessageType::Position:
 				broadcast<PositionMsg>(message);
 				break;
@@ -791,13 +790,9 @@ namespace Fortress::Network::Server
 			case eMessageType::Firing:
 				broadcast<FiringMsg>(message);
 				break;
-			case eMessageType::PositionReport:
-			{
-				const auto* report = reinterpret_cast<const PositionMsg*>(message);
-				room_games[message->room_id].on_position(
-					message->player_id, report->position, report->offset.get_x(), report->offset.get_y());
+			case eMessageType::MoveInput:
+				room_games[message->room_id].on_move_input(message->player_id, *reinterpret_cast<const MoveInputMsg*>(message));
 				break;
-			}
 			case eMessageType::ShotRequest:
 				room_games[message->room_id].on_shot_request(
 					message->player_id, *reinterpret_cast<const ShotRequestMsg*>(message), std::chrono::steady_clock::now());
@@ -809,16 +804,6 @@ namespace Fortress::Network::Server
 			case eMessageType::TurnAck:
 				room_games[message->room_id].on_turn_ack(message->player_id, *reinterpret_cast<const TurnAckMsg*>(message));
 				break;
-			case eMessageType::Destroyed:
-			{
-				// A client may only report its own character's fall.
-				const auto* destroyed = reinterpret_cast<const DestroyedMsg*>(message);
-				if (destroyed->object_type == eObjectType::Character && destroyed->object_player_id == message->player_id)
-				{
-					room_games[message->room_id].on_death_report(message->player_id);
-				}
-				break;
-			}
 			case eMessageType::LobbyJoin:
 				add_client(-1, message->player_id, client_info, time);
 				add_player(message->player_id);
@@ -862,6 +847,13 @@ namespace Fortress::Network::Server
 				break;
 			case eMessageType::DebugStateReq:
 				reply_debug_state(message, client_info);
+				break;
+			case eMessageType::DebugPlace:
+				if (message->room_id >= 0 && message->room_id < max_rooms)
+				{
+					const auto* place = reinterpret_cast<const DebugPlaceMsg*>(message);
+					room_games[message->room_id].debug_place(place->target, place->x, place->y);
+				}
 				break;
 			default: break; // Unknown type of message
 			}

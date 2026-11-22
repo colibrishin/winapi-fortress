@@ -2,6 +2,8 @@
 #include "Round.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 
 #include "BattleScene.h"
 #include "debug.hpp"
@@ -61,6 +63,7 @@ namespace Fortress
 
 		receive_turn_changes();
 		update_replay();
+		receive_character_state();
 
 		if (m_state == eRoundState::InProgress)
 		{
@@ -143,6 +146,7 @@ namespace Fortress
 		}
 
 		m_shots.erase(m_shots.begin(), m_shots.upper_bound(msg.turn_no - 1));
+		log_prediction(msg.turn_no);
 		m_turn_no = msg.turn_no;
 		m_wind_affect = msg.wind;
 		m_time_limit = msg.time_limit > 0.0f ? msg.time_limit : max_time;
@@ -261,6 +265,7 @@ namespace Fortress
 		shot.events.clear();
 		shot.path_chunks = -1;
 		m_replaying = true;
+		m_replay_state_tick = m_state_tick;
 		m_state = eRoundState::Waiting;
 
 		if (const auto current = m_current_player.lock())
@@ -415,6 +420,72 @@ namespace Fortress
 		}
 
 		follow_current_player();
+	}
+
+	// With FORTRESS_AUTOPLAY_LOG set (test runs), records how far the local
+	// player's prediction was from the server's position.
+	void Round::log_prediction(const uint32_t turn_no) const
+	{
+		char* path = nullptr;
+		size_t length = 0;
+		if (_dupenv_s(&path, &length, "FORTRESS_AUTOPLAY_LOG") != 0 || path == nullptr)
+		{
+			return;
+		}
+
+		std::ofstream log(path, std::ios::app);
+		free(path);
+
+		for (const auto& ptr : m_all_players)
+		{
+			if (const auto ch = ptr.lock(); ch && ch->is_localplayer())
+			{
+				log << "turn " << turn_no << ": local player " << ch->get_player_id() << " max deviation "
+					<< ch->get_max_server_deviation() << " px, corrections " << ch->get_server_corrections()
+					<< ", position (" << ch->get_position().get_x() << ", " << ch->get_position().get_y() << ")" << std::endl;
+			}
+		}
+	}
+
+	void Round::receive_character_state()
+	{
+		Network::CharacterStateMsg msg{};
+		Network::CharacterStateMsg latest{};
+		bool any = false;
+
+		while (EngineHandle::get_messenger()->pop_character_state(&msg))
+		{
+			if (!any || msg.tick >= latest.tick)
+			{
+				latest = msg;
+				any = true;
+			}
+		}
+
+		// While replaying, the clients' own physics drops characters into
+		// the new craters; the server catches up after the replay.
+		if (!any || m_replaying || latest.tick <= m_replay_state_tick || latest.tick < m_state_tick)
+		{
+			return;
+		}
+
+		m_state_tick = latest.tick;
+
+		const int count = std::min<int>(latest.count, static_cast<int>(std::size(latest.entries)));
+		for (int i = 0; i < count; ++i)
+		{
+			const auto& e = latest.entries[i];
+			if (const auto ch = find_player(e.pid))
+			{
+				if (!e.alive)
+				{
+					ch->set_server_hp(0.0f);
+					continue;
+				}
+
+				ch->apply_server_state({e.x, e.y}, e.facing, e.pitch, e.mp, e.moving != 0);
+			}
+		}
 	}
 
 	void Round::update_camera()

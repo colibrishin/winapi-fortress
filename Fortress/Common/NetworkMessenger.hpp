@@ -43,9 +43,10 @@ namespace Fortress::Network
 		bool check_game_start(GameStartMsg& gsm);
 
 		// Server-authoritative turns and shots.
-		void send_shot_request(eProjectileType prj_type, eItemType item, float charged, Math::Vector2 position, float facing, float pitch);
-		void send_position_report(Math::Vector2 position, float facing, float pitch);
-		void send_own_death();
+		void send_shot_request(eProjectileType prj_type, eItemType item, float charged);
+		// Held movement key: 0 none, 1 left, 2 right (Sim::MoveInput).
+		void send_move_input(uint8_t input);
+		bool pop_character_state(CharacterStateMsg* out);
 		// Resends the last ShotRequest until the server's result or the next
 		// turn arrives (UDP may drop it; the server ignores duplicates).
 		void resend_pending_shot_request();
@@ -121,6 +122,7 @@ namespace Fortress::Network
 		ShotRequestMsg m_pending_shot_request{};
 		bool m_shot_request_pending = false;
 		float m_shot_request_timer = 0.0f;
+		uint32_t m_move_input_seq = 0;
 		bool m_joined_lobby = false;
 	public:
 		std::recursive_mutex& queue_mutex = m_soc.queue_lock;
