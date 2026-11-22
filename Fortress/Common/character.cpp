@@ -78,6 +78,47 @@ namespace Fortress::ObjectBase
 		CharacterController::fire();
 	}
 
+	ProjectilePointer character::spawn_replay_projectile(
+		const eProjectileType kind, const unsigned int id, const GlobalPosition& position)
+	{
+		std::weak_ptr<projectile> instantiated;
+
+		switch (kind)
+		{
+		case eProjectileType::Sub:
+			instantiated = get_sub_projectile(id);
+			break;
+		case eProjectileType::Nutshell:
+			instantiated = get_nutshell_projectile();
+			break;
+		default:
+			instantiated = get_main_projectile(id);
+			break;
+		}
+
+		const auto prj = instantiated.lock();
+		if (!prj)
+		{
+			return {};
+		}
+
+		prj->start_replay(position);
+
+		if (const auto scene = Scene::SceneManager::get_active_scene().lock())
+		{
+			scene->add_game_object(Abstract::LayerType::Projectile, prj);
+		}
+
+		add_active_projectile(prj);
+		return instantiated;
+	}
+
+	void character::teleport_to(const GlobalPosition& position)
+	{
+		m_position = position;
+		m_velocity = {};
+	}
+
 	float character::get_armor() const
 	{
 		return m_armor;

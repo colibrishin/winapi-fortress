@@ -16,20 +16,18 @@ namespace Fortress::Network::Client::Object
 		void send_move() const;
 		void send_stop() const;
 		void send_firing() const;
-		void send_fire() const;
-		void send_pre_item() const;
-		void send_item() const;
+		void request_shot() override;
+		void send_position_report();
 
 		void change_projectile() override;
 		void equip_nutshell() override;
 		void unequip_nutshell() override;
 
-		void update_local_player() const;
+		void update_local_player();
 		void update_non_local_player();
 
 		bool has_state_changed() const;
 
-		void hit(const std::weak_ptr<ObjectBase::projectile>& prj, const GlobalPosition& ch_position) override;
 
 	protected:
 		ClientCharacter(const Network::PlayerID& player_id, const std::wstring& name, const std::wstring& short_name,
@@ -44,6 +42,8 @@ namespace Fortress::Network::Client::Object
 
 		eCharacterState m_previous_state_;
 		eCharacterState m_current_state_;
+		float m_position_report_timer = 0.0f;
+		bool m_death_reported = false;
 
 		std::weak_ptr<ObjectBase::projectile> get_nutshell_projectile() override;
 	};
@@ -73,24 +73,44 @@ namespace Fortress::Network::Client::Object
 		EngineHandle::get_messenger()->send_firing_signal(get_position(), get_offset());
 	}
 
-	inline void ClientCharacter::send_fire() const
+	inline void ClientCharacter::request_shot()
 	{
-		EngineHandle::get_messenger()->send_fire_signal(
-			get_position(), 
-			get_offset(), 
-			get_charged_power());
+		if (!is_movable_localplayer())
+		{
+			return;
+		}
+
+		const auto item = m_active_item.lock();
+		EngineHandle::get_messenger()->send_shot_request(
+			get_projectile_type(),
+			item ? item->get_item_type() : eItemType::None,
+			get_charged_power(),
+			get_position(),
+			get_offset().get_x(),
+			get_movement_pitch_radian());
+
+		// Items are reusable (test cheat): only disarm it for this shot.
+		if (item)
+		{
+			item->reset();
+		}
 	}
 
-	inline void ClientCharacter::send_pre_item() const
+	// Until the server simulates movement it takes the position from the
+	// owning client (bounded on the server side).
+	inline void ClientCharacter::send_position_report()
 	{
-		EngineHandle::get_messenger()->send_item_signal(
-						get_position(), get_offset(), m_active_item_index, m_active_item.lock()->get_item_type());
-	}
+		constexpr float report_interval = 0.25f;
 
-	inline void ClientCharacter::send_item() const
-	{
-		EngineHandle::get_messenger()->send_item_fire_signal(
-						get_position(), get_offset(), m_active_item_index, m_active_item.lock()->get_item_type(), get_charged_power());
+		m_position_report_timer += DeltaTime::get_deltaTime();
+		if (m_position_report_timer < report_interval)
+		{
+			return;
+		}
+
+		m_position_report_timer = 0.0f;
+		EngineHandle::get_messenger()->send_position_report(
+			get_position(), get_offset().get_x(), get_movement_pitch_radian());
 	}
 
 	inline void ClientCharacter::change_projectile()
@@ -123,8 +143,27 @@ namespace Fortress::Network::Client::Object
 		}
 	}
 
-	inline void ClientCharacter::update_local_player() const
+	inline void ClientCharacter::update_local_player()
 	{
+		if (!is_localplayer())
+		{
+			return;
+		}
+
+		const bool dead = m_current_state_ == eCharacterState::Death || m_current_state_ == eCharacterState::Dead;
+		if (dead)
+		{
+			// The server only learns a fall from the owner (hp deaths it knows).
+			if (!m_death_reported)
+			{
+				EngineHandle::get_messenger()->send_own_death();
+				m_death_reported = true;
+			}
+			return;
+		}
+
+		send_position_report();
+
 		if (is_movable_localplayer() && has_state_changed())
 		{
 			switch (m_current_state_)
@@ -143,21 +182,6 @@ namespace Fortress::Network::Client::Object
 			case eCharacterState::Firing:
 				send_firing();
 				break;
-			case eCharacterState::FireSub:
-			case eCharacterState::Fire:
-				send_fire();
-				break;
-			case eCharacterState::Fired: break;
-			case eCharacterState::PreItem: 
-				send_pre_item();
-				break;
-			case eCharacterState::Item:
-				send_item();
-				break;
-			case eCharacterState::TurnEnd: break;
-			case eCharacterState::Dead: break;
-			case eCharacterState::Death: break;
-			case eCharacterState::Hit: break;
 			default: ;
 			}
 		}
@@ -171,9 +195,6 @@ namespace Fortress::Network::Client::Object
 			FiringMsg firing_msg{};
 			StopMsg stop_msg{};
 			ProjectileSelectMsg projectile_msg{};
-			ItemMsg item_msg{};
-			CharacterFireMsg fire_msg{};
-			ItemFireMsg item_fire_msg{};
 
 			if (EngineHandle::get_messenger()->get_move_signal(get_player_id(), &position_msg))
 			{
@@ -200,26 +221,10 @@ namespace Fortress::Network::Client::Object
 			{
 				m_projectile_type = projectile_msg.prj_type;
 			}
-			if(EngineHandle::get_messenger()->get_item_signal(get_player_id(), &item_msg))
-			{
-				set_item_active(item_msg.index);
-			}
 			if (EngineHandle::get_messenger()->get_firing_signal(get_player_id(), &firing_msg))
 			{
 				set_offset(firing_msg.offset);
 				set_state(eCharacterState::Firing);
-			}
-			if (EngineHandle::get_messenger()->get_fire_signal(get_player_id(), &fire_msg))
-			{
-				m_power = fire_msg.charged;
-				set_state(eCharacterState::Fire);
-				fire();
-			}
-			if (m_active_item.lock() && EngineHandle::get_messenger()->get_item_fire_signal(
-				get_player_id(), m_active_item.lock()->get_item_type(), &item_fire_msg))
-			{
-				m_power = item_fire_msg.charged;
-				set_state(eCharacterState::Item);
 			}
 		}
 	}
@@ -227,43 +232,6 @@ namespace Fortress::Network::Client::Object
 	inline bool ClientCharacter::has_state_changed() const
 	{
 		return m_previous_state_ != m_current_state_;
-	}
-
-	inline void ClientCharacter::hit(const std::weak_ptr<ObjectBase::projectile>& prj, const GlobalPosition& ch_position)
-	{
-		if(const auto projectile = prj.lock())
-		{
-			// @todo: tracking from server.
-			if(is_localplayer())
-			{
-				EngineHandle::get_messenger()->send_message<DamageMsg>(
-					eMessageType::Damage, DamageMsg
-				{
-					{},
-					projectile->get_hit_msg().crc32,
-					projectile->get_origin()->get_type(),
-					get_type(),
-					projectile->get_origin()->get_player_id(),
-					projectile->get_id(),
-					projectile->get_type(),
-					projectile->get_center(),
-					ch_position
-				});
-			}
-
-			DamageMsg dmg{};
-			while (!EngineHandle::get_messenger()->pop_message<DamageMsg>(
-				eMessageType::Damage, get_player_id(), &dmg,
-			[&](const DamageMsg* msg)
-				{
-					return projectile->get_id() == msg->prj_id;
-				}))
-			{
-			}
-
-			apply_damage(dmg.damage);
-		}
-		
 	}
 
 	inline std::weak_ptr<ObjectBase::projectile> ClientCharacter::get_nutshell_projectile()

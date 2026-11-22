@@ -6,6 +6,7 @@
 #include "EgyptStairway.hpp"
 #include "Map.hpp"
 #include "../Common/objectManager.hpp"
+#include "../Common/MapLayout.hpp"
 
 namespace Fortress::Map
 {
@@ -39,23 +40,29 @@ namespace Fortress::Map
 			L"Desert_shutterstock", "./resources/images/desert-landscape-shutterstock.jpg");
 	}
 
+	// Layout comes from Common/MapLayout.hpp, shared with the server.
 	inline void DesertMap::set_grounds()
 	{
-		m_grounds.push_back(
-			ObjectBase::ObjectManager::create_object<Object::EgyptStairway>(
-				L"left_upper", 
-				Math::Vector2{-300.0f, 0.0f}, 
-				Math::Vector2{500.0f, 100.0f}, Math::left));
-		m_grounds.push_back(
-			ObjectBase::ObjectManager::create_object<Object::EgyptGround>(
-				L"mid_lower", 
-				Math::Vector2{0.0f, 100.0f}, 
-				Math::Vector2{500.0f, 100.0f}));
-		m_grounds.push_back(
-			ObjectBase::ObjectManager::create_object<Object::EgyptStairway>(
-				L"right_upper", 
-				Math::Vector2{300.0f, 0.0f},
-				Math::Vector2{500.0f, 100.0f}, Math::right));
+		using Layout::GroundShape;
+
+		for (const auto& entry : Layout::desert)
+		{
+			const Math::Vector2 position{entry.x, entry.y};
+			const Math::Vector2 size{entry.width, entry.height};
+
+			if (entry.shape == GroundShape::Flat)
+			{
+				m_grounds.push_back(
+					ObjectBase::ObjectManager::create_object<Object::EgyptGround>(entry.name, position, size));
+			}
+			else
+			{
+				m_grounds.push_back(
+					ObjectBase::ObjectManager::create_object<Object::EgyptStairway>(
+						entry.name, position, size,
+						entry.shape == GroundShape::StairwayRampLeft ? Math::left : Math::right));
+			}
+		}
 	}
 }
 #endif // DESERTMAP_HPP

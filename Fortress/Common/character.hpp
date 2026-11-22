@@ -57,6 +57,11 @@ namespace Fortress::ObjectBase
 
 		float get_armor() const;
 		Network::PlayerID get_player_id() const;
+
+		// Creates a projectile of the given kind that only follows a replayed
+		// server path (see projectile::start_replay).
+		ProjectilePointer spawn_replay_projectile(eProjectileType kind, unsigned int id, const GlobalPosition& position);
+		void teleport_to(const GlobalPosition& position);
 		virtual Network::eCharacterType get_type() const = 0;
 	private:
 		Network::PlayerID m_player_id;

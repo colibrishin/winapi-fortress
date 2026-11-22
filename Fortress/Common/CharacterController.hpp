@@ -71,6 +71,11 @@ namespace Fortress::Controller
 		void add_item(const unsigned int index, const std::shared_ptr<Object::item>& item);
 		std::vector<std::pair<const int, std::weak_ptr<Object::item>>> get_available_items() const;
 
+		// Server-authoritative shots: the hp comes from the server, and a
+		// replayed shot ends with the turn (projectiles removed, back to idle).
+		void set_server_hp(float hp);
+		void finish_replay();
+
 	protected:
 		CharacterController(
 			const Network::PlayerID& player_id,
@@ -87,6 +92,8 @@ namespace Fortress::Controller
 		const std::wstring& get_current_sprite_name() const;
 
 		virtual void fire();
+		// Asks the server to fire with the current projectile, power and item.
+		virtual void request_shot();
 		virtual void move_left();
 		virtual void move_right();
 		virtual void stop();
