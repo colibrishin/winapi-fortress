@@ -317,6 +317,44 @@ namespace Fortress::Controller
 	{
 	}
 
+	void CharacterController::request_shot()
+	{
+	}
+
+	void CharacterController::set_server_hp(const float hp)
+	{
+		const bool damaged = hp < m_hp;
+		set_hp(hp);
+
+		if (damaged && m_hp > 0.0f && get_state() != eCharacterState::Dead && get_state() != eCharacterState::Death)
+		{
+			m_previousHitCount++;
+			set_state(eCharacterState::Hit);
+		}
+	}
+
+	void CharacterController::finish_replay()
+	{
+		if (const auto scene = Scene::SceneManager::get_active_scene().lock())
+		{
+			for (const auto& prj : m_active_projectiles)
+			{
+				scene->remove_game_object(Abstract::LayerType::Projectile, prj);
+			}
+		}
+
+		m_active_projectiles.clear();
+		m_active_item = {};
+		m_previousHitCount = 0;
+		m_bDoubleDamage = false;
+		reset_mp();
+
+		if (get_state() != eCharacterState::Dead && get_state() != eCharacterState::Death)
+		{
+			set_state(eCharacterState::Idle);
+		}
+	}
+
 	void CharacterController::move_left()
 	{
 		if(const auto move_sound = m_sound_pack.get_sound(L"move").lock())
@@ -521,15 +559,11 @@ namespace Fortress::Controller
 			}
 			if (Input::getKeyUp(eKeyCode::SPACE))
 			{
-				if(const auto item = m_active_item.lock())
-				{
-					set_state(eCharacterState::Item);
-				}
-				else
-				{
-					set_state(eCharacterState::Fire);
-					fire();
-				}
+				// The server simulates the shot; the projectiles appear when
+				// its result arrives (Round replays it).
+				request_shot();
+				set_unmovable();
+				set_state(eCharacterState::Fire);
 			}
 		}
 	}
@@ -566,12 +600,6 @@ namespace Fortress::Controller
 	void CharacterController::hit_state()
 	{
 		default_state();
-
-		if(const auto item = m_active_item.lock())
-		{
-			set_state(eCharacterState::Item);
-			return;
-		}
 
 		if(!is_projectile_fire_counted() && is_projectile_active())
 		{
@@ -620,7 +648,13 @@ namespace Fortress::Controller
 		{
 			if (item->is_instant())
 			{
-				set_state(eCharacterState::Item);
+				// Instant items (repair) are applied by the server too.
+				if (is_movable_localplayer())
+				{
+					request_shot();
+					set_unmovable();
+				}
+				set_state(eCharacterState::Idle);
 				return;
 			}
 		}

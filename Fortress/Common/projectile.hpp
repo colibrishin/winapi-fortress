@@ -32,6 +32,14 @@ namespace Fortress::ObjectBase
 
 		virtual void fire(const Math::Vector2& position, const Math::Vector2& velocity, const float charged);
 
+		// Replay of a server-simulated shot: no physics, no collision, no
+		// damage; the replay moves the projectile along the server's path.
+		void start_replay(const Math::Vector2& position);
+		void replay_move(const Math::Vector2& position);
+		void replay_hit();
+		void replay_end();
+		bool is_replay() const;
+
 		float get_radius() const;
 		float get_damage() const;
 		float get_penetration_rate() const;
@@ -66,6 +74,7 @@ namespace Fortress::ObjectBase
 		float m_armor_penetration;
 
 		Math::Vector2 m_wind_acceleration;
+		bool m_replay = false;
 	};
 }
 #endif // PROJECTILE_HPP

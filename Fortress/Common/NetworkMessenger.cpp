@@ -183,21 +183,107 @@ namespace Fortress::Network
 			projectile->room_id == m_rood_id_;
 	}
 
-	void NetworkMessenger::get_wind_acceleration(RspWindMsg* wind)
+	void NetworkMessenger::send_shot_request(
+		const eProjectileType prj_type, const eItemType item, const float charged,
+		const Math::Vector2 position, const float facing, const float pitch)
 	{
-		const auto msg = create_network_message<ReqWindMsg>(
-			eMessageType::ReqWind, m_rood_id_, m_player_id);
+		ShotRequestMsg msg{};
+		msg.type = eMessageType::ShotRequest;
+		msg.room_id = m_rood_id_;
+		msg.player_id = m_player_id;
+		msg.turn_no = m_turn_no;
+		msg.prj_type = prj_type;
+		msg.item = item;
+		msg.charged = charged;
+		msg.position = position;
+		msg.facing = facing;
+		msg.pitch = pitch;
 
-		send_and_retry<ReqWindMsg, RspWindMsg>(&msg, m_server_info, wind, eMessageType::RspWind);
+		const auto stamped = create_prewritten_network_message<ShotRequestMsg>(msg);
+		m_soc.send_message<ShotRequestMsg>(&stamped, m_server_info);
 	}
 
-	void NetworkMessenger::send_turn_end()
+	void NetworkMessenger::send_position_report(const Math::Vector2 position, const float facing, const float pitch)
 	{
-		const auto msg = create_network_message<TurnEndMsg>(
-			eMessageType::TurnEnd, m_rood_id_, m_player_id);
+		const auto msg = create_network_message<PositionMsg>(
+			eMessageType::PositionReport, m_rood_id_, m_player_id, eObjectType::Character, position, Math::Vector2{facing, pitch});
+		m_soc.send_message<PositionMsg>(&msg, m_server_info);
+	}
 
-		GOMsg go{};
-		send_and_retry<TurnEndMsg, GOMsg>(&msg, m_server_info, &go, eMessageType::GO);
+	void NetworkMessenger::send_own_death()
+	{
+		DestroyedMsg msg{};
+		msg.type = eMessageType::Destroyed;
+		msg.room_id = m_rood_id_;
+		msg.player_id = m_player_id;
+		msg.object_type = eObjectType::Character;
+		msg.object_player_id = m_player_id;
+
+		const auto stamped = create_prewritten_network_message<DestroyedMsg>(msg);
+		m_soc.send_message<DestroyedMsg>(&stamped, m_server_info);
+	}
+
+	bool NetworkMessenger::pop_turn_change(TurnChangeMsg* out)
+	{
+		if (pop_message<TurnChangeMsg>(eMessageType::TurnChange, -1, out, [](const TurnChangeMsg*) { return true; }))
+		{
+			ack_turn(out->turn_no);
+			if (out->turn_no > m_turn_no)
+			{
+				m_turn_no = out->turn_no;
+			}
+			return true;
+		}
+
+		return false;
+	}
+
+	bool NetworkMessenger::pop_shot_path(ShotPathMsg* out)
+	{
+		if (pop_message<ShotPathMsg>(eMessageType::ShotPath, -1, out, [](const ShotPathMsg*) { return true; }))
+		{
+			ack_shot_chunk(out->turn_no, false, out->chunk);
+			return true;
+		}
+
+		return false;
+	}
+
+	bool NetworkMessenger::pop_shot_events(ShotEventsMsg* out)
+	{
+		if (pop_message<ShotEventsMsg>(eMessageType::ShotEvents, -1, out, [](const ShotEventsMsg*) { return true; }))
+		{
+			ack_shot_chunk(out->turn_no, true, out->chunk);
+			return true;
+		}
+
+		return false;
+	}
+
+	void NetworkMessenger::ack_turn(const uint32_t turn_no)
+	{
+		TurnAckMsg msg{};
+		msg.type = eMessageType::TurnAck;
+		msg.room_id = m_rood_id_;
+		msg.player_id = m_player_id;
+		msg.turn_no = turn_no;
+
+		const auto stamped = create_prewritten_network_message<TurnAckMsg>(msg);
+		m_soc.send_message<TurnAckMsg>(&stamped, m_server_info);
+	}
+
+	void NetworkMessenger::ack_shot_chunk(const uint32_t turn_no, const bool is_events, const uint16_t chunk)
+	{
+		ShotAckMsg msg{};
+		msg.type = eMessageType::ShotAck;
+		msg.room_id = m_rood_id_;
+		msg.player_id = m_player_id;
+		msg.turn_no = turn_no;
+		msg.is_events = is_events;
+		msg.chunk = chunk;
+
+		const auto stamped = create_prewritten_network_message<ShotAckMsg>(msg);
+		m_soc.send_message<ShotAckMsg>(&stamped, m_server_info);
 	}
 
 	bool NetworkMessenger::check_lobby_update(LobbyInfoMsg* out)
@@ -263,70 +349,6 @@ namespace Fortress::Network
 			firing->player_id == player_id &&
 			firing->object_type == eObjectType::Character &&
 			firing->room_id == m_rood_id_;
-	}
-
-	void NetworkMessenger::send_fire_signal(
-		Math::Vector2 position,
-		Math::Vector2 offset,
-		float charged)
-	{
-		const auto msg = create_network_message<CharacterFireMsg>(
-			eMessageType::Fire, m_rood_id_, m_player_id, eObjectType::Character, position, offset, charged);
-
-		m_soc.send_message<CharacterFireMsg>(&msg, m_server_info);
-	}
-
-	bool NetworkMessenger::get_fire_signal(
-		PlayerID player_id,
-		CharacterFireMsg* fire)
-	{
-		return m_soc.find_message<CharacterFireMsg>(eMessageType::Fire, fire) &&
-			fire->player_id == player_id &&
-			fire->room_id == m_rood_id_;
-	}
-
-	void NetworkMessenger::send_item_signal(Math::Vector2 position, Math::Vector2 offset, unsigned int index, eItemType item)
-	{
-		const auto msg = create_network_message<ItemMsg>(
-			eMessageType::Item, m_rood_id_, m_player_id, eObjectType::Character, position, offset, index, item);
-		m_soc.send_message<ItemMsg>(&msg, m_server_info);
-	}
-
-	bool NetworkMessenger::get_item_signal(PlayerID player_id, ItemMsg* item)
-	{
-		return m_soc.find_message<ItemMsg>(eMessageType::Item, item) &&
-			item->player_id == player_id &&
-			item->room_id == m_rood_id_;
-	}
-
-	void NetworkMessenger::send_item_fire_signal(Math::Vector2 position, Math::Vector2 offset, unsigned index,
-		eItemType item, float charged)
-	{
-		const auto msg = create_network_message<ItemFireMsg>(
-			eMessageType::ItemFire, m_rood_id_, m_player_id, eObjectType::Character, position, offset, index, item, charged);
-		m_soc.send_message<ItemFireMsg>(&msg, m_server_info);
-	}
-
-	bool NetworkMessenger::get_item_fire_signal(PlayerID player_id, eItemType type, ItemFireMsg* item)
-	{
-		return m_soc.find_message<ItemFireMsg>(eMessageType::ItemFire, item) &&
-			item->player_id == player_id &&
-			item->item_type == type &&
-			item->room_id == m_rood_id_;
-	}
-
-	void NetworkMessenger::send_hit_signal(const eObjectType type, const Math::Vector2 position)
-	{
-		const auto msg = create_network_message<ProjectileHitMsg>(
-			eMessageType::Hit, m_rood_id_, m_player_id, type, position);
-		m_soc.send_message<ProjectileHitMsg>(&msg, m_server_info);
-	}
-
-	bool NetworkMessenger::get_hit_signal(const PlayerID player_id, ProjectileHitMsg* hit)
-	{
-		return m_soc.find_message<ProjectileHitMsg>(eMessageType::Hit, hit) &&
-			player_id == hit->player_id &&
-			m_rood_id_ == hit->room_id;
 	}
 
 	bool NetworkMessenger::check_delta_time()

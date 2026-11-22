@@ -42,8 +42,15 @@ namespace Fortress::Network
 		void send_delta_time(float deltaTime);
 		bool check_game_start(GameStartMsg& gsm);
 
-		void get_wind_acceleration(RspWindMsg* wind);
-		void send_turn_end();
+		// Server-authoritative turns and shots.
+		void send_shot_request(eProjectileType prj_type, eItemType item, float charged, Math::Vector2 position, float facing, float pitch);
+		void send_position_report(Math::Vector2 position, float facing, float pitch);
+		void send_own_death();
+		bool pop_turn_change(TurnChangeMsg* out);
+		bool pop_shot_path(ShotPathMsg* out);
+		bool pop_shot_events(ShotEventsMsg* out);
+		void ack_turn(uint32_t turn_no);
+		void ack_shot_chunk(uint32_t turn_no, bool is_events, uint16_t chunk);
 
 		void send_move_signal(Math::Vector2 position, Math::Vector2 offset);
 		bool get_move_signal(PlayerID player_id, PositionMsg* position);
@@ -53,14 +60,6 @@ namespace Fortress::Network
 		bool get_projectile_select_signal(PlayerID player_id, ProjectileSelectMsg* projectile);
 		void send_firing_signal(Math::Vector2 position, Math::Vector2 offset);
 		bool get_firing_signal(PlayerID player_id, FiringMsg* firing);
-		void send_fire_signal(Math::Vector2 position, Math::Vector2 offset, float charged);
-		bool get_fire_signal(PlayerID player_id, CharacterFireMsg* fire);
-		void send_item_signal(Math::Vector2 position, Math::Vector2 offset, unsigned index, eItemType item);
-		bool get_item_signal(PlayerID player_id, ItemMsg* item);
-		void send_item_fire_signal(Math::Vector2 position, Math::Vector2 offset, unsigned index, eItemType item, float charged);
-		bool get_item_fire_signal(PlayerID player_id, eItemType type, ItemFireMsg* item);
-		void send_hit_signal(eObjectType type, Math::Vector2 position);
-		bool get_hit_signal(PlayerID player_id, ProjectileHitMsg* hit);
 
 		template <typename T = Message>
 		void send_message(const eMessageType type, const T& pre_packed)
@@ -114,6 +113,8 @@ namespace Fortress::Network
 
 		PlayerID m_player_id;
 		RoomID m_rood_id_;
+		// Latest turn announced by the server (sent with shot requests).
+		uint32_t m_turn_no = 0;
 		bool m_joined_lobby = false;
 	public:
 		std::recursive_mutex& queue_mutex = m_soc.queue_lock;

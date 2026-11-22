@@ -11,12 +11,54 @@ namespace Fortress::ObjectBase
 {
 	void projectile::update()
 	{
+		if (m_replay)
+		{
+			return;
+		}
+
 		rigidBody::update();
 		ProjectileController::update();
 	}
 
+	void projectile::start_replay(const Math::Vector2& position)
+	{
+		m_replay = true;
+		m_position = position;
+		m_velocity = {};
+		set_state(eProjectileState::Flying);
+		m_current_sprite.lock()->play();
+		play_fire_sound();
+		set_enabled();
+	}
+
+	void projectile::replay_move(const Math::Vector2& position)
+	{
+		m_position = position;
+	}
+
+	void projectile::replay_hit()
+	{
+		play_hit_sound();
+	}
+
+	void projectile::replay_end()
+	{
+		set_state(eProjectileState::Destroyed);
+		set_disabled();
+	}
+
+	bool projectile::is_replay() const
+	{
+		return m_replay;
+	}
+
 	void projectile::on_collision(const CollisionCode& collision, const GlobalPosition& collision_point, const std::weak_ptr<Abstract::rigidBody>& other)
 	{
+		if (m_replay)
+		{
+			return;
+		}
+
 		if(const auto prj = other.lock()->downcast_from_this<projectile>())
 		{
 			return;
