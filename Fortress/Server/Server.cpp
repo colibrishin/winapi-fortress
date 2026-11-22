@@ -138,21 +138,6 @@ namespace Fortress::Network::Server
 
 	void add_client(RoomID id, PlayerID pid, const SOCKADDR_IN& client_info, const std::time_t time)
 	{
-		if (client_list.find({id, pid}) != client_list.end())
-		{
-			const auto& [eip, epid, etime, _] = client_list[{id, pid}];
-
-			if(std::strncmp(
-				reinterpret_cast<const char*>(&eip),
-				reinterpret_cast<const char*>(extract_ip(client_info)),
-				sizeof(sockaddr)) != 0)
-			{
-				std::cout << "Client IP changed. Removing from known list." << std::endl;
-				client_list.erase({id, pid});
-				return;
-			}
-		}
-
 		client_list[{id, pid}] = {client_info, pid, time};
 	}
 
@@ -215,6 +200,13 @@ namespace Fortress::Network::Server
 	void add_player_to_room(RoomID room_id, PlayerID player_id, const Client& client)
 	{
 		std::cout << player_id << " Joined " << room_id << std::endl;
+
+		// A player is in one room at a time.
+		for (RoomID other = 0; other < max_rooms; ++other)
+		{
+			client_list.erase({other, player_id});
+		}
+
 		client_list[{room_id, player_id}] = client;
 	}
 
@@ -575,9 +567,9 @@ namespace Fortress::Network::Server
 		std::chrono::steady_clock::time_point last_seen;
 	};
 
-	// A silent binding can be taken over after this (e.g. a restarted client
-	// on a new port).
-	constexpr auto session_timeout = std::chrono::seconds(5);
+	// A binding is released after this long without any message from its
+	// address. Client.exe pings every second once it is in the lobby.
+	constexpr auto session_timeout = std::chrono::seconds(30);
 
 	static std::map<uint64_t, Session> sessions;
 	static std::map<PlayerID, uint64_t> session_by_pid;
@@ -587,6 +579,8 @@ namespace Fortress::Network::Server
 		return static_cast<uint64_t>(address.sin_addr.s_addr) << 16 | ntohs(address.sin_port);
 	}
 
+	// Forgets a binding together with everything the player had joined, so
+	// the old address stops receiving broadcasts and rooms do not wait for it.
 	void release_session(const uint64_t key)
 	{
 		const auto it = sessions.find(key);
@@ -595,13 +589,49 @@ namespace Fortress::Network::Server
 			return;
 		}
 
-		const auto owner = session_by_pid.find(it->second.pid);
+		const PlayerID pid = it->second.pid;
+
+		for (auto entry = client_list.begin(); entry != client_list.end();)
+		{
+			const bool owned = entry->first.second == pid && address_key(entry->second.ip) == key;
+			if (owned && entry->first.first >= 0)
+			{
+				const RoomID room = entry->first.first;
+				load_done[room][pid] = false;
+				turn_end[room][pid] = false;
+				double_damage_enabled[room][pid] = false;
+				hit_count[room][pid] = 0;
+			}
+			entry = owned ? client_list.erase(entry) : std::next(entry);
+		}
+
+		const auto owner = session_by_pid.find(pid);
 		if (owner != session_by_pid.end() && owner->second == key)
 		{
 			session_by_pid.erase(owner);
 		}
 
 		sessions.erase(it);
+		std::cout << "Released player " << pid << std::endl;
+	}
+
+	void expire_sessions()
+	{
+		const auto now = std::chrono::steady_clock::now();
+		std::vector<uint64_t> expired;
+
+		for (const auto& [key, session] : sessions)
+		{
+			if (now - session.last_seen >= session_timeout)
+			{
+				expired.push_back(key);
+			}
+		}
+
+		for (const uint64_t key : expired)
+		{
+			release_session(key);
+		}
 	}
 
 	bool is_client_message(const eMessageType type)
@@ -668,26 +698,27 @@ namespace Fortress::Network::Server
 		const auto session = sessions.find(key);
 		const bool claims = type == eMessageType::PING || type == eMessageType::LobbyJoin;
 
+		if (claims && room != -1)
+		{
+			std::cout << "Rejected: PING/LobbyJoin must use the lobby room id" << std::endl;
+			return false;
+		}
+
 		if (session != sessions.end() && session->second.pid == pid)
 		{
 			session->second.last_seen = now;
 		}
 		else if (claims)
 		{
-			// Take the player id if nobody holds it or its holder went silent.
-			const auto owner = session_by_pid.find(pid);
-			if (owner != session_by_pid.end())
+			// Only a free player id can be claimed; a holder that went silent
+			// was already released by expire_sessions().
+			if (session_by_pid.find(pid) != session_by_pid.end())
 			{
-				const auto& holder = sessions.at(owner->second);
-				if (now - holder.last_seen < session_timeout)
-				{
-					std::cout << "Rejected: player " << pid << " is bound to another address" << std::endl;
-					return false;
-				}
-				release_session(owner->second);
+				std::cout << "Rejected: player " << pid << " is bound to another address" << std::endl;
+				return false;
 			}
 
-			release_session(key);
+			release_session(key);  // this address switches to another player id
 			sessions[key] = {pid, now};
 			session_by_pid[pid] = key;
 		}
@@ -724,20 +755,12 @@ namespace Fortress::Network::Server
 		return true;
 	}
 
+	// Send/receive errors are not treated as a disconnect: one bad packet
+	// must not lock a player out. Silent players are released by
+	// expire_sessions() instead.
 	void drop_bad_clients()
 	{
 		std::lock_guard _(server_socket.bad_client_lock);
-
-		for (const auto& bad_client : server_socket.m_bad_client_list)
-		{
-			for (auto it = client_list.begin(); it != client_list.end();)
-			{
-				it = address_key(it->second.ip) == address_key(bad_client) ? client_list.erase(it) : std::next(it);
-			}
-
-			release_session(address_key(bad_client));
-		}
-
 		server_socket.m_bad_client_list.clear();
 	}
 
@@ -757,6 +780,7 @@ namespace Fortress::Network::Server
 			}
 
 			drop_bad_clients();
+			expire_sessions();
 
 			char buffer[max_packet_size + 1]{};
 			sockaddr_in client_info{};
@@ -788,7 +812,7 @@ namespace Fortress::Network::Server
 			case eMessageType::RspWind:
 			case eMessageType::PONG: break;
 			case eMessageType::PING:
-				add_client(message->room_id, message->player_id, client_info, time);
+				// Keeps the session alive (authorize); does not join anything.
 				reply_ping(client_info);
 				break;
 			case eMessageType::Position:
@@ -855,7 +879,7 @@ namespace Fortress::Network::Server
 			case eMessageType::Destroyed:
 				break;
 			case eMessageType::LobbyJoin:
-				add_client(message->room_id, message->player_id, client_info, time);
+				add_client(-1, message->player_id, client_info, time);
 				add_player(message->player_id);
 				std::cout << "New player joined. Broadcasting new lobby info." << std::endl;
 				broadcast_lobby_info();

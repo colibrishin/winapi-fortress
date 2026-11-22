@@ -106,8 +106,14 @@ namespace
 	bool scenario_smoke()
 	{
 		ScriptClient player(60901);
-		player.send_header<PingMsg>(eMessageType::PING, -1, 1);
+		LobbyInfoMsg lobby{};
+		player.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 1);
+		if (!player.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby))
+		{
+			return fail("no LobbyInfo from server (is it running?)");
+		}
 
+		player.send_header<PingMsg>(eMessageType::PING, -1, 1);
 		PongMsg pong{};
 		if (!player.wait_for<PongMsg>(eMessageType::PONG, &pong))
 		{
@@ -229,6 +235,34 @@ namespace
 		if (!p1.wait_for<GameStartMsg>(eMessageType::GameStart, &go_start)) return fail("p1 got no GameStart");
 		if (!p2.wait_for<GameStartMsg>(eMessageType::GameStart, &go_start)) return fail("p2 got no GameStart");
 
+		// Relays still reach the other player.
+		PositionMsg position{};
+		position.type = eMessageType::Position;
+		position.room_id = room;
+		position.player_id = 1;
+		position.object_type = eObjectType::Character;
+		position.position = {123.0f, 45.0f};
+		p1.send(position);
+		PositionMsg relayed{};
+		if (!p2.wait_for<PositionMsg>(eMessageType::Position, &relayed) || relayed.player_id != 1 ||
+			relayed.position.get_x() != 123.0f)
+			return fail("p2 did not receive p1's position");
+
+		DamageMsg damage{};
+		damage.type = eMessageType::Damage;
+		damage.room_id = room;
+		damage.player_id = 2;
+		damage.shooter_type = eCharacterType::CannonCharacter;
+		damage.victim_type = eCharacterType::MissileCharacter;
+		damage.prj_owner_id = 1;
+		damage.prj_type = Fortress::eProjectileType::Main;
+		damage.prj_position = {100.0f, 100.0f};
+		damage.ch_position = {100.0f, 130.0f};
+		p2.send(damage);
+		DamageMsg reply{};
+		if (!p2.wait_for<DamageMsg>(eMessageType::Damage, &reply)) return fail("victim got no damage reply");
+		if (!p1.wait_for<DamageMsg>(eMessageType::Damage, &reply)) return fail("shooter got no damage broadcast");
+
 		RspWindMsg wind{};
 		p1.send_header<ReqWindMsg>(eMessageType::ReqWind, room, 1);
 		if (!p1.wait_for<RspWindMsg>(eMessageType::RspWind, &wind)) return fail("p1 got no wind");
@@ -276,36 +310,64 @@ namespace
 		damage.prj_owner_id = 100000;
 		player.send(damage);
 
+		// Bound player, ids out of range: must be rejected by the range check.
+		player.send_header<TurnEndMsg>(eMessageType::TurnEnd, 15, 7);
+		player.send_header<TurnEndMsg>(eMessageType::TurnEnd, -2, 7);
+		player.send_header<LoadDoneMsg>(eMessageType::LoadDone, 1000000, 7);
+
+		// PING carries a room id but must not put the sender into that room.
+		player.send_header<PingMsg>(eMessageType::PING, 5, 7);
+
 		Sleep(300);
+		DebugStateRspMsg state{};
+		if (!player.request_state(5, &state)) return fail("no debug state reply");
+		if (state.slot_count != 0) return fail("PING with a room id joined that room");
+
 		player.send_header<PingMsg>(eMessageType::PING, -1, 7);
 		PongMsg pong{};
 		return player.wait_for<PongMsg>(eMessageType::PONG, &pong) || fail("server stopped answering");
 	}
 
-	// A player id stays with the address that claimed it until that
-	// address has been silent for the session timeout.
+	// A player id stays with the address that claimed it while that address
+	// keeps talking (Client.exe pings every second). Another address can
+	// neither claim it nor take its room slot. After 30 s of silence the
+	// binding is released together with the player's room entry.
 	bool scenario_session_takeover()
 	{
+		constexpr RoomID room = 0;
 		ScriptClient owner(60961);
 		ScriptClient other(60971);
 		LobbyInfoMsg lobby{};
+		RoomInfoMsg info{};
+		DebugStateRspMsg state{};
 
 		owner.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 1);
 		if (!owner.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby)) return fail("owner got no LobbyInfo");
+		owner.send_header<RoomJoinMsg>(eMessageType::RoomJoin, room, 1);
+		if (!owner.wait_for<RoomInfoMsg>(eMessageType::RoomInfo, &info)) return fail("owner got no RoomInfo");
 
-		other.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 1);
-		Sleep(300);
+		// While the owner pings, the other address keeps trying to claim the
+		// id and its room slot.
+		for (int second = 0; second < 8; ++second)
+		{
+			owner.send_header<PingMsg>(eMessageType::PING, -1, 1);
+			other.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 1);
+			other.send_header<RoomJoinMsg>(eMessageType::RoomJoin, room, 1);
+			Sleep(1000);
+		}
 
-		DebugStateRspMsg state{};
-		if (!owner.request_state(-1, &state)) return fail("no debug state reply");
+		if (!owner.request_state(room, &state)) return fail("no debug state reply");
 		const auto* slot = find_slot(state, 1);
-		if (slot == nullptr || slot->port != owner.port()) return fail("active binding was taken over");
+		if (slot == nullptr || slot->port != owner.port()) return fail("an active player's room slot was taken over");
 
-		std::cout << "waiting for the 5 s session timeout..." << std::endl;
-		Sleep(6000);
+		std::cout << "owner goes silent for the 30 s session timeout..." << std::endl;
+		Sleep(31000);
 
 		other.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 1);
 		if (!other.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby)) return fail("silent binding was not released");
+
+		if (!other.request_state(room, &state)) return fail("no debug state reply");
+		if (find_slot(state, 1) != nullptr) return fail("released player is still in the room");
 
 		if (!other.request_state(-1, &state)) return fail("no debug state reply");
 		slot = find_slot(state, 1);

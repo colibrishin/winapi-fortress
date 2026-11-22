@@ -114,6 +114,7 @@ namespace Fortress::Network
 
 		PlayerID m_player_id;
 		RoomID m_rood_id_;
+		bool m_joined_lobby = false;
 	public:
 		std::recursive_mutex& queue_mutex = m_soc.queue_lock;
 		std::condition_variable_any& queue_event = m_soc.queue_event;
