@@ -59,6 +59,7 @@ namespace Fortress
 		Input::update();
 		TimerManager::update();
 		Scene::SceneManager::update();
+		EngineHandle::get_messenger()->send_alive();
 	}
 
 	void Application::render()

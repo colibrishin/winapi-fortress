@@ -19,11 +19,18 @@ namespace Fortress::Network
 		m_receiver.detach();
 	}
 
+	// Keeps the server's address binding for this player alive; the server
+	// releases a player id after 30 s without any message.
 	void NetworkMessenger::send_alive()
 	{
-		constexpr float alive_interval = 0.1f;
+		constexpr float alive_interval = 1.0f;
 
 		static float counter = 0.0f;
+
+		if (!m_joined_lobby)
+		{
+			return;
+		}
 
 		if(alive_interval <= counter)
 		{
@@ -61,6 +68,7 @@ namespace Fortress::Network
    		send_and_retry<LobbyJoinMsg, LobbyInfoMsg>(&msg, m_server_info, out, eMessageType::LobbyInfo);
 
 		set_room_id(-1);
+		m_joined_lobby = true;
 	}
 
 	void NetworkMessenger::join_room(RoomID room_id, RoomInfoMsg* out)
