@@ -16,6 +16,7 @@
 #include "../Common/scene.hpp"
 #include "../Common/SoundManager.hpp"
 #include "winapihandles.hpp"
+#include "Autoplay.hpp"
 
 namespace Fortress
 {
@@ -24,6 +25,7 @@ namespace Fortress
 		m_hwnd = hwnd;
 		m_hdc = hdc;
 		Input::initialize();
+		Autoplay::initialize();
 		DeltaTime::initialize();
 		
 		EngineHandle::set_handle(std::make_shared<WinAPIHandles>());
@@ -56,6 +58,7 @@ namespace Fortress
 			{static_cast<float>(WinAPIHandles::get_window_width()), static_cast<float>(WinAPIHandles::get_actual_max_y() / 2)})*/;
 
 		DeltaTime::update();
+		Autoplay::update();
 		Input::update();
 		TimerManager::update();
 		Scene::SceneManager::update();

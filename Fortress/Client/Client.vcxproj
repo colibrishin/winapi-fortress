@@ -135,6 +135,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="application.h" />
+    <ClInclude Include="Autoplay.hpp" />
     <ClInclude Include="BulletinBoardScene.h" />
     <ClInclude Include="CharacterProperties.hpp" />
     <ClInclude Include="Client.h" />

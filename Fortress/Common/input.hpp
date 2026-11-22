@@ -120,8 +120,16 @@ namespace Fortress
 		__forceinline static bool getKeyUp(eKeyCode);
 		__forceinline static bool getKey(eKeyCode);
 
+		// Test automation (Client/Autoplay.hpp). Once enabled, key states come
+		// only from set_virtual_key: the real keyboard is ignored and input is
+		// read even when the window has no focus.
+		inline static void enable_virtual_input();
+		inline static void set_virtual_key(eKeyCode code, bool pressed);
+
 	private:
 		inline static std::vector<Key> m_keys;
+		inline static bool m_virtual_input = false;
+		inline static std::vector<bool> m_virtual_pressed;
 
 		inline static void checkKeyState();
 	};
@@ -147,9 +155,12 @@ namespace Fortress
 			m_keys.end(),
 			[](Key& key)
 			{
-				USHORT winapi_state = GetAsyncKeyState(key.m_native_code);
+				const size_t index = static_cast<size_t>(&key - m_keys.data());
+				const bool pressed = m_virtual_input
+					? static_cast<bool>(m_virtual_pressed[index])
+					: (GetAsyncKeyState(key.m_native_code) & 0x8001) != 0;
 
-				if (winapi_state & 0x8001)
+				if (pressed)
 				{
 					if (key.m_pressed)
 					{
@@ -181,9 +192,23 @@ namespace Fortress
 	 */
 	void Input::update()
 	{
-		if(GetFocus())
+		if(m_virtual_input || GetFocus())
 		{
 			checkKeyState();
+		}
+	}
+
+	void Input::enable_virtual_input()
+	{
+		m_virtual_input = true;
+		m_virtual_pressed.assign(m_keys.size(), false);
+	}
+
+	void Input::set_virtual_key(const eKeyCode code, const bool pressed)
+	{
+		if (m_virtual_input)
+		{
+			m_virtual_pressed[static_cast<size_t>(code)] = pressed;
 		}
 	}
 
