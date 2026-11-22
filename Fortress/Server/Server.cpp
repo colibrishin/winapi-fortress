@@ -18,6 +18,9 @@
 #include "../Common/resourceManager.hpp"
 
 #include "ClientSide.hpp"
+#include "RoomGame.hpp"
+
+#include <filesystem>
 
 #pragma comment (lib, "ws2_32.lib")
 #pragma comment (lib, "Common.lib")
@@ -60,23 +63,18 @@ namespace Fortress::Network::Server
 	static std::mutex player_list_lock;
 	static bool player_list[15]{ false, };
 	static bool load_done[15][15] { false, };
-	static bool turn_end[15][15] {false, };
-	static bool double_damage_enabled[15][15] {false,};
-	static int hit_count[15][15] {0, };
 
-	static std::default_random_engine e;
-	static std::uniform_real_distribution<float> dis{-50, 50};
-	static float room_wind[15]{0.0f, };
+	// Running matches, one per room, and the GameInit each was started with.
+	static RoomGame room_games[15];
+	static GameInitMsg room_init[15];
+
+	// Path of the cloud mask BMP for SkyValley (see find_cloud_mask).
+	static std::string cloud_mask_path;
 
 	static std::map<std::pair<RoomID, PlayerID>, Client> client_list = {};
 
 	// Set by --debug-state. Lets the scripted test client inspect state.
 	static bool debug_state_enabled = false;
-
-	int get_wind_acceleration(const RoomID room_id)
-	{
-		return static_cast<int>(room_wind[room_id] / 10.0f) * 10.0f;
-	}
 
 	unsigned int get_room_player_count(RoomID room_id)
 	{
@@ -121,19 +119,6 @@ namespace Fortress::Network::Server
 		}
 
 		return clients;
-	}
-
-	void send_go(const Message* message, RoomID room_id)
-	{
-		const auto clients = get_room_client(room_id);
-
-		const auto msg = create_network_message<GOMsg>(
-			eMessageType::GO, message->room_id, -1, message->crc32);
-
-		for(const auto& client : clients)
-		{
-			server_socket.send_message<GOMsg>(&msg, client.ip);
-		}
 	}
 
 	void add_client(RoomID id, PlayerID pid, const SOCKADDR_IN& client_info, const std::time_t time)
@@ -291,27 +276,12 @@ namespace Fortress::Network::Server
 		client_list[{room_id, player_id}].room_info.items[it_idx] = it_type;
 	}
 
-	void send_wind(const Message* message, const sockaddr_in& client_info)
-	{
-		const int wind = get_wind_acceleration(message->room_id);
-		const auto msg = create_network_message<RspWindMsg>(
-			eMessageType::RspWind, message->room_id, message->player_id, wind);
-		server_socket.send_message<RspWindMsg>(&msg, client_info);
-	}
-
-	void reset_wind(const RoomID room_id)
-	{
-		room_wind[room_id] = dis(e);
-	}
-
 	void aggregate_send_room_info(const Message* message)
 	{
 		std::cout << "Room start received, Aggregates room info" << std::endl;
 		const auto* recv_msg = reinterpret_cast<const RoomStartMsg*>(message);
 		const RoomID room_id = recv_msg->room_id;
 		const eMapType map = recv_msg->map_type;
-		std::fill_n(hit_count[message->room_id], std::size(hit_count[message->room_id]), 0);
-
 		GameInitMsg gi{};
 		uint8_t pos = 0;
 		const auto room_clients = get_room_client(room_id);
@@ -350,7 +320,7 @@ namespace Fortress::Network::Server
 		std::cout << "Player Count: " << static_cast<int>(gi.player_count) << std::endl;
 		std::cout << "Map: " << static_cast<int>(gi.map_type) << std::endl;
 
-		reset_wind(room_id);
+		room_init[room_id] = gi;
 		const auto msg = create_prewritten_network_message<GameInitMsg>(gi);
 
 		for(const auto& client : room_clients)
@@ -402,6 +372,63 @@ namespace Fortress::Network::Server
 		{
 			server_socket.send_message<GameStartMsg>(&msg, client.ip);
 		}
+
+		if (!room_games[room_id].start(room_id, room_init[room_id], cloud_mask_path, std::chrono::steady_clock::now()))
+		{
+			std::cout << "Could not build the map for room " << room_id << " (cloud mask: " << cloud_mask_path << ")" << std::endl;
+		}
+
+		std::fill(std::begin(load_done[room_id]), std::end(load_done[room_id]), false);
+	}
+
+	// Sends what the room's game queued, to each player's bound address.
+	void flush_room_game(const RoomID room_id)
+	{
+		for (auto& [target, payload] : room_games[room_id].take_outbox())
+		{
+			const auto member = client_list.find({room_id, target});
+			if (member == client_list.end())
+			{
+				continue;
+			}
+
+			std::visit([&](const auto& msg) { server_socket.send_message(&msg, member->second.ip); }, payload);
+		}
+	}
+
+	void tick_room_games()
+	{
+		const auto now = std::chrono::steady_clock::now();
+		for (RoomID room = 0; room < max_rooms; ++room)
+		{
+			if (room_games[room].active())
+			{
+				room_games[room].tick(now);
+				flush_room_game(room);
+			}
+		}
+	}
+
+	// The cloud mask lives with the client's resources. Look next to the
+	// server first, then in the source tree (x64/<config> -> Client).
+	std::string find_cloud_mask(const std::string& resources)
+	{
+		const std::string relative = "misc/tiles/cloud-mask.bmp";
+		const std::vector<std::string> candidates = {
+			resources.empty() ? std::string() : resources + "/" + relative,
+			"./resources/" + relative,
+			"../../Client/resources/" + relative,
+		};
+
+		for (const auto& candidate : candidates)
+		{
+			if (!candidate.empty() && std::filesystem::exists(candidate))
+			{
+				return candidate;
+			}
+		}
+
+		return candidates.back();
 	}
 
 	bool check_priority(RoomID room_id, PlayerID player_id)
@@ -453,78 +480,6 @@ namespace Fortress::Network::Server
 		}
 	}
 
-	bool check_turn_done(const RoomID room_id)
-	{
-		const auto clients = get_room_client(room_id);
-		int load_finished = 0;
-
-		for(const auto& client: clients)
-		{
-			if(turn_end[room_id][client.pid])
-			{
-				load_finished++;
-			}
-		}
-
-		return load_finished == clients.size();
-	}
-
-	void set_turn_done(const Message* message)
-	{
-		std::fill_n(hit_count[message->room_id], std::size(hit_count[message->room_id]), 0);
-		turn_end[message->room_id][message->player_id] = true;
-	}
-
-	void clear_turn_done(const RoomID room_id)
-	{
-		std::fill(std::begin(turn_end[room_id]), std::end(turn_end[room_id]), false);
-	}
-
-	void calculate_damage_and_reply(Message* message, const sockaddr_in& client_info)
-	{
-		auto* casted = reinterpret_cast<DamageMsg*>(message);
-
-		if (casted->prj_owner_id < 0 || casted->prj_owner_id >= max_players)
-		{
-			return;
-		}
-
-		auto& dd = double_damage_enabled[casted->room_id][casted->prj_owner_id];
-
-		const float damage = calculate_damage(
-			casted->shooter_type,
-			casted->victim_type, 
-			casted->prj_type, 
-			hit_count[message->room_id][message->player_id],
-			dd,
-			Object::Property::projectile_hitbox_getter(),
-			casted->prj_position,
-			casted->ch_position);
-
-		if(dd)
-		{
-			dd = false;
-		}
-
-		casted->damage = damage;
-		const auto overwrite_message = create_prewritten_network_message<DamageMsg>(*casted);
-
-		std::cout << " Damage : " << damage << std::endl;
-
-		server_socket.send_message<DamageMsg>(&overwrite_message, client_info);
-		broadcast<DamageMsg>(&overwrite_message);
-	}
-
-	void set_double_damage_flag(const Message* message)
-	{
-		auto* casted = reinterpret_cast<const ItemMsg*>(message);
-
-		if(casted->item_type == eItemType::DoubleDamage)
-		{
-			double_damage_enabled[casted->room_id][casted->player_id] = true;
-		}
-	}
-
 	void reply_debug_state(const Message* message, const sockaddr_in& client_info)
 	{
 		const RoomID room_id = message->room_id;
@@ -539,7 +494,14 @@ namespace Fortress::Network::Server
 		rsp.type = eMessageType::DebugStateRsp;
 		rsp.room_id = room_id;
 		rsp.player_id = -1;
-		rsp.wind = is_game_room ? get_wind_acceleration(room_id) : 0;
+		rsp.current_player = -1;
+
+		const RoomGame* game = is_game_room && room_games[room_id].active() ? &room_games[room_id] : nullptr;
+		if (game != nullptr)
+		{
+			rsp.current_player = game->current();
+			rsp.turn_no = game->turn_no();
+		}
 
 		for (const auto& [key, client] : client_list)
 		{
@@ -553,17 +515,26 @@ namespace Fortress::Network::Server
 			slot.address = client.ip.sin_addr.s_addr;
 			slot.port = ntohs(client.ip.sin_port);
 
-			if (is_game_room && key.second >= 0 && key.second < 15)
+			if (game != nullptr)
 			{
-				slot.turn_end = turn_end[room_id][key.second];
-				slot.double_damage = double_damage_enabled[room_id][key.second];
-				slot.hit_count = hit_count[room_id][key.second];
+				for (const auto& ch : game->world().characters)
+				{
+					if (ch.id == key.second)
+					{
+						slot.in_game = 1;
+						slot.alive = ch.alive;
+						slot.hp = ch.hp;
+						slot.x = ch.position.x;
+						slot.y = ch.position.y;
+					}
+				}
 			}
 		}
 
 		const auto reply = create_prewritten_network_message<DebugStateRspMsg>(rsp);
 		server_socket.send_message<DebugStateRspMsg>(&reply, client_info);
 	}
+
 
 	// Which source address speaks for which player. A player id is claimed
 	// by PING or LobbyJoin from an address and stays bound to it while that
@@ -604,11 +575,7 @@ namespace Fortress::Network::Server
 			const bool owned = entry->first.second == pid && address_key(entry->second.ip) == key;
 			if (owned && entry->first.first >= 0)
 			{
-				const RoomID room = entry->first.first;
-				load_done[room][pid] = false;
-				turn_end[room][pid] = false;
-				double_damage_enabled[room][pid] = false;
-				hit_count[room][pid] = 0;
+				load_done[entry->first.first][pid] = false;
 			}
 			entry = owned ? client_list.erase(entry) : std::next(entry);
 		}
@@ -657,18 +624,12 @@ namespace Fortress::Network::Server
 		case eMessageType::Position:
 		case eMessageType::Stop:
 		case eMessageType::Firing:
-		case eMessageType::Fire:
 		case eMessageType::ProjectileSelect:
-		case eMessageType::Item:
-		case eMessageType::ItemFire:
-		case eMessageType::Hit:
-		case eMessageType::Damage:
 		case eMessageType::Destroyed:
-		case eMessageType::ReqWind:
-		case eMessageType::TurnEnd:
-		case eMessageType::ProjectileFire:
-		case eMessageType::ProjectileFlying:
-		case eMessageType::ProjectileHit:
+		case eMessageType::ShotRequest:
+		case eMessageType::ShotAck:
+		case eMessageType::TurnAck:
+		case eMessageType::PositionReport:
 		case eMessageType::DebugStateReq:
 			return true;
 		default:
@@ -789,6 +750,7 @@ namespace Fortress::Network::Server
 
 			drop_bad_clients();
 			expire_sessions();
+			tick_room_games();
 
 			char buffer[max_packet_size + 1]{};
 			sockaddr_in client_info{};
@@ -796,12 +758,12 @@ namespace Fortress::Network::Server
 
 			if(!server_socket.get_any_message(&client_info, time, buffer))
 			{
-				server_socket.block_until_queue_event();
+				// Short wait: turn timers and resends run in this loop.
+				server_socket.block_until_queue_event(50);
 				continue;
 			}
 
 			const Message* message = reinterpret_cast<Message*>(buffer);
-			auto* writable_message = reinterpret_cast<Message*>(buffer);
 
 			if (!authorize(message, client_info))
 			{
@@ -810,82 +772,53 @@ namespace Fortress::Network::Server
 
 			switch(message->type)
 			{
-			case eMessageType::GO:
-			case eMessageType::NOGO:
-			case eMessageType::LobbyInfo:
-			case eMessageType::RoomInfo:
-			case eMessageType::GameInit:
-			case eMessageType::ReqDeltaTime:
-			case eMessageType::GameStart:
-			case eMessageType::RspWind:
 			case eMessageType::PONG: break;
 			case eMessageType::PING:
 				// Keeps the session alive (authorize); does not join anything.
 				reply_ping(client_info);
 				break;
+			// Movement is still decided by the moving client (until the server
+			// simulates it); these are relayed for display only.
 			case eMessageType::Position:
-				// @todo: verification?
-				std::cout << "Message type: Position ";
 				broadcast<PositionMsg>(message);
 				break;
 			case eMessageType::ProjectileSelect:
-				std::cout << "Message type: Projectile Selection ";
 				broadcast<ProjectileSelectMsg>(message);
 				break;
 			case eMessageType::Stop:
-				std::cout << "Message type: Stop ";
 				broadcast<StopMsg>(message);
 				break;
 			case eMessageType::Firing:
-				std::cout << "Message type: Firing ";
 				broadcast<FiringMsg>(message);
 				break;
-			case eMessageType::Fire:
-				std::cout << "Message type: Fire ";
-				broadcast<CharacterFireMsg>(message);
+			case eMessageType::PositionReport:
+			{
+				const auto* report = reinterpret_cast<const PositionMsg*>(message);
+				room_games[message->room_id].on_position(
+					message->player_id, report->position, report->offset.get_x(), report->offset.get_y());
 				break;
-			case eMessageType::Item:
-				std::cout << "Message type: Item ";
-				set_double_damage_flag(message);
-				broadcast<ItemMsg>(message);
+			}
+			case eMessageType::ShotRequest:
+				room_games[message->room_id].on_shot_request(
+					message->player_id, *reinterpret_cast<const ShotRequestMsg*>(message), std::chrono::steady_clock::now());
+				flush_room_game(message->room_id);
 				break;
-			case eMessageType::ItemFire:
-				std::cout << "Message type: Item Fire ";
-				broadcast<ItemFireMsg>(message);
+			case eMessageType::ShotAck:
+				room_games[message->room_id].on_shot_ack(message->player_id, *reinterpret_cast<const ShotAckMsg*>(message));
 				break;
-			case eMessageType::ProjectileFire:
-				std::cout << "Message type : Projectile Fire";
-				broadcast<ProjectileFireMsg>(message);
-				break;
-			case eMessageType::ProjectileFlying:
-				std::cout << "Message type : Projectile Flying";
-				broadcast<ProjectileFlyingMsg>(message);
-				break;
-			case eMessageType::ProjectileHit:
-				std::cout << "Message type : Projectile Hit ";
-				broadcast<ProjectileHitMsg>(message);
-				break;
-			case eMessageType::TurnEnd:
-				// @todo: check previous message.
-				std::cout << "Turn ended" << std::endl;
-				set_turn_done(message);
-				if(check_turn_done(message->room_id))
-				{
-					reset_wind(message->room_id);
-					clear_turn_done(message->room_id);
-					send_go(message, message->room_id);
-				}
-				break;
-			case eMessageType::Damage:
-				std::cout << "Message type : Damage ";
-				calculate_damage_and_reply(writable_message, client_info);
-				break;
-			case eMessageType::ReqWind:
-				std::cout << "Got wind request" << std::endl;
-				send_wind(message, client_info);
+			case eMessageType::TurnAck:
+				room_games[message->room_id].on_turn_ack(message->player_id, *reinterpret_cast<const TurnAckMsg*>(message));
 				break;
 			case eMessageType::Destroyed:
+			{
+				// A client may only report its own character's fall.
+				const auto* destroyed = reinterpret_cast<const DestroyedMsg*>(message);
+				if (destroyed->object_type == eObjectType::Character && destroyed->object_player_id == message->player_id)
+				{
+					room_games[message->room_id].on_death_report(message->player_id);
+				}
 				break;
+			}
 			case eMessageType::LobbyJoin:
 				add_client(-1, message->player_id, client_info, time);
 				add_player(message->player_id);
@@ -939,6 +872,7 @@ namespace Fortress::Network::Server
 int main(int argc, char** argv)
 {
     std::cout << "Start server...\n";
+	std::string resources;
 
 	for (int i = 1; i < argc; ++i)
 	{
@@ -947,7 +881,14 @@ int main(int argc, char** argv)
 			Fortress::Network::Server::debug_state_enabled = true;
 			std::cout << "Debug state requests enabled\n";
 		}
+		else if (std::string(argv[i]) == "--resources" && i + 1 < argc)
+		{
+			resources = argv[++i];
+		}
 	}
+
+	Fortress::Network::Server::cloud_mask_path = Fortress::Network::Server::find_cloud_mask(resources);
+	std::cout << "Cloud mask: " << Fortress::Network::Server::cloud_mask_path << "\n";
 
 	std::thread receiving_task(
 		&Fortress::Network::Server::Socket::receiving_message, 

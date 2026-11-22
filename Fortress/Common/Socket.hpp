@@ -57,12 +57,12 @@ namespace Fortress::Network::Server
 			}
 		}
 
-		void block_until_queue_event()
+		void block_until_queue_event(const unsigned int wait_ms = timeout)
 		{
 			std::unique_lock ql(queue_lock);
 			// The predicate covers a message queued between the caller's
 			// empty check and this wait.
-			queue_event.wait_for(ql, std::chrono::milliseconds(timeout), [this] { return !m_message_queue_.empty(); });
+			queue_event.wait_for(ql, std::chrono::milliseconds(wait_ms), [this] { return !m_message_queue_.empty(); });
 		}
 
 		bool get_any_message(SOCKADDR_IN* info_out, std::time_t& time_out, char* message_out)

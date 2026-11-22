@@ -63,6 +63,18 @@ namespace Fortress::Network
 		ProjectileFlying = 0x901,
 		ProjectileHit = 0x902,
 
+		// Server-authoritative shots. The shooter asks, the server simulates
+		// and sends the result in chunks; turns are decided by the server.
+		ShotRequest = 0xA01,
+		ShotPath = 0xA02,
+		ShotEvents = 0xA03,
+		ShotAck = 0xA04,
+		TurnChange = 0xA05,
+		TurnAck = 0xA06,
+		// Client -> server: own position, offset = {facing, pitch}. Trusted
+		// within bounds until the server simulates movement.
+		PositionReport = 0xA07,
+
 		// Test harness only. The server answers these only when it was
 		// started with --debug-state.
 		DebugStateReq = 0xF01,
@@ -282,6 +294,106 @@ namespace Fortress::Network
 	{
 	};
 
+	// Client -> server: the current player fires (or uses an instant item).
+	// Position, facing and pitch are reported by the client until the server
+	// simulates movement; the server bounds them.
+	struct ShotRequestMsg : Message
+	{
+		uint32_t turn_no;
+		eProjectileType prj_type;
+		eItemType item;
+		float charged;
+		Math::Vector2 position;
+		float facing;  // +1 right, -1 left
+		float pitch;   // radians
+	};
+
+	// Server -> client: one chunk of the shot's projectile path.
+	struct ShotPathMsg : Message
+	{
+		struct Sample
+		{
+			uint16_t tick;
+			uint8_t projectile;
+			uint8_t projectile_kind;  // eProjectileType of the shot
+			float x;
+			float y;
+		};
+
+		uint32_t turn_no;
+		PlayerID shooter;
+		uint16_t chunk;
+		uint16_t path_chunks;
+		uint16_t event_chunks;
+		uint16_t end_tick;
+		uint16_t count;
+		Sample samples[80];
+	};
+
+	// Same values as Fortress::Sim::ShotEventType (checked in Server/RoomGame.hpp).
+	enum class eShotEvent : uint8_t
+	{
+		Spawn,
+		Explosion,
+		Damage,
+		Death,
+		Teleport,
+		End,
+	};
+
+	// Server -> client: one chunk of the shot's events.
+	struct ShotEventsMsg : Message
+	{
+		struct Event
+		{
+			uint16_t tick;
+			uint8_t type;
+			uint8_t projectile;
+			PlayerID player;
+			float x;
+			float y;
+			float value;
+			float hp;
+		};
+
+		uint32_t turn_no;
+		PlayerID shooter;
+		uint16_t chunk;
+		uint16_t path_chunks;
+		uint16_t event_chunks;
+		uint16_t end_tick;
+		uint16_t count;
+		Event events[40];
+	};
+
+	struct ShotAckMsg : Message
+	{
+		uint32_t turn_no;
+		uint8_t is_events;  // 0 = ShotPath chunk, 1 = ShotEvents chunk
+		uint16_t chunk;
+	};
+
+	// Server -> client: start of a turn (or the end of the match). Carries
+	// the authoritative hp of every player.
+	struct TurnChangeMsg : Message
+	{
+		uint32_t turn_no;
+		PlayerID current;     // -1 when the match is over
+		PlayerID winner;      // -1 none yet, -2 draw
+		int wind;
+		float time_limit;     // seconds
+		uint32_t terrain_crc;
+		uint8_t count;
+		PlayerID players[15];
+		float hp[15];
+		uint8_t alive[15];
+	};
+
+	struct TurnAckMsg : Message
+	{
+		uint32_t turn_no;
+	};
+
 	struct DebugStateReqMsg : Message
 	{
 	};
@@ -295,12 +407,15 @@ namespace Fortress::Network
 			PlayerID pid;
 			uint32_t address; // network byte order
 			uint16_t port;    // host byte order
-			uint8_t turn_end;
-			uint8_t double_damage;
-			int hit_count;
+			uint8_t in_game;  // the room's match knows this player
+			uint8_t alive;
+			float hp;
+			float x;
+			float y;
 		};
 
-		int wind;
+		PlayerID current_player;  // -1 if no match is running
+		uint32_t turn_no;
 		uint8_t slot_count;
 		Slot slots[15];
 	};
@@ -366,5 +481,8 @@ namespace Fortress::Network
 
 	// Socket::send_message silently drops anything bigger than this.
 	static_assert(sizeof(DebugStateRspMsg) <= max_packet_size);
+	static_assert(sizeof(ShotPathMsg) <= max_packet_size);
+	static_assert(sizeof(ShotEventsMsg) <= max_packet_size);
+	static_assert(sizeof(TurnChangeMsg) <= max_packet_size);
 }
 #endif // MESSAGE_HPP

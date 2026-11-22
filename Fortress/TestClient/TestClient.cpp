@@ -57,17 +57,21 @@ namespace
 		template <typename T>
 		bool wait_for(const eMessageType type, T* out, const int timeout_ms = reply_timeout_ms)
 		{
-			for (int waited = 0; waited < timeout_ms; waited += 10)
+			// Checks at least once, so timeout 0 polls.
+			for (int waited = 0; ; waited += 10)
 			{
 				if (m_socket.find_message<T>(type, out))
 				{
 					return true;
 				}
 
+				if (waited >= timeout_ms)
+				{
+					return false;
+				}
+
 				Sleep(10);
 			}
-
-			return false;
 		}
 
 		bool request_state(const RoomID room_id, DebugStateRspMsg* out)
@@ -187,15 +191,10 @@ namespace
 		return slot->port == owner.port() || fail("spoofed RoomJoin took over the slot");
 	}
 
-	// Two players go through the same message sequence as Client.exe:
-	// lobby, room, character, start, loading, wind, turn end. Guards the
-	// normal flow against the session checks.
-	bool scenario_client_flow()
+	// Lobby -> room -> start -> loading with two players, the same message
+	// sequence as Client.exe. p1 picks no character (gets the cannon).
+	bool start_match(ScriptClient& p1, ScriptClient& p2, const RoomID room, const eCharacterType p2_type = eCharacterType::MissileCharacter)
 	{
-		constexpr RoomID room = 3;
-		ScriptClient p1(60931);
-		ScriptClient p2(60941);
-
 		LobbyInfoMsg lobby{};
 		p1.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 1);
 		if (!p1.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby)) return fail("p1 got no LobbyInfo");
@@ -213,7 +212,7 @@ namespace
 		ch.type = eMessageType::RoomSelectCh;
 		ch.room_id = room;
 		ch.player_id = 2;
-		ch.ch_type = eCharacterType::MissileCharacter;
+		ch.ch_type = p2_type;
 		p2.send(ch);
 
 		RoomStartMsg start{};
@@ -226,7 +225,7 @@ namespace
 		GameInitMsg init{};
 		if (!p1.wait_for<GameInitMsg>(eMessageType::GameInit, &init)) return fail("p1 got no GameInit");
 		if (!p2.wait_for<GameInitMsg>(eMessageType::GameInit, &init)) return fail("p2 got no GameInit");
-		if (init.player_count != 2 || init.character_type[1] != eCharacterType::MissileCharacter)
+		if (init.player_count != 2 || init.character_type[1] != p2_type)
 			return fail("GameInit does not carry both players and p2's character");
 		if (init.character_type[0] != eCharacterType::CannonCharacter)
 			return fail("p1 picked no character and should get the cannon, got " +
@@ -237,8 +236,156 @@ namespace
 		GameStartMsg go_start{};
 		if (!p1.wait_for<GameStartMsg>(eMessageType::GameStart, &go_start)) return fail("p1 got no GameStart");
 		if (!p2.wait_for<GameStartMsg>(eMessageType::GameStart, &go_start)) return fail("p2 got no GameStart");
+		return true;
+	}
 
-		// Relays still reach the other player.
+	// Waits for TurnChange number turn_no (acknowledging every TurnChange seen).
+	bool wait_turn(ScriptClient& player, const PlayerID pid, const RoomID room, const uint32_t turn_no,
+	               TurnChangeMsg* out, const int timeout_ms = reply_timeout_ms)
+	{
+		for (int waited = 0; waited < timeout_ms; waited += 50)
+		{
+			TurnChangeMsg msg{};
+			while (player.wait_for<TurnChangeMsg>(eMessageType::TurnChange, &msg, 0))
+			{
+				TurnAckMsg ack{};
+				ack.type = eMessageType::TurnAck;
+				ack.room_id = room;
+				ack.player_id = pid;
+				ack.turn_no = msg.turn_no;
+				player.send(ack);
+
+				if (msg.turn_no == turn_no)
+				{
+					*out = msg;
+					return true;
+				}
+			}
+			Sleep(50);
+		}
+		return false;
+	}
+
+	struct ReceivedShot
+	{
+		std::map<int, ShotPathMsg> path;
+		std::map<int, ShotEventsMsg> events;
+		int path_chunks = -1;
+		int event_chunks = -1;
+		int duplicates = 0;
+
+		bool complete() const
+		{
+			return path_chunks >= 0 && static_cast<int>(path.size()) == path_chunks &&
+				static_cast<int>(events.size()) == event_chunks;
+		}
+
+		std::vector<ShotEventsMsg::Event> all_events() const
+		{
+			std::vector<ShotEventsMsg::Event> out;
+			for (const auto& [_, chunk] : events)
+			{
+				out.insert(out.end(), chunk.events, chunk.events + chunk.count);
+			}
+			return out;
+		}
+	};
+
+	// Collects the chunks of the shot of turn_no. With ack = false nothing is
+	// acknowledged (to make the server resend).
+	bool collect_shot(ScriptClient& player, const PlayerID pid, const RoomID room, const uint32_t turn_no,
+	                  ReceivedShot& shot, const int timeout_ms = reply_timeout_ms, const bool ack = true)
+	{
+		const auto send_ack = [&](const bool is_events, const uint16_t chunk)
+		{
+			ShotAckMsg msg{};
+			msg.type = eMessageType::ShotAck;
+			msg.room_id = room;
+			msg.player_id = pid;
+			msg.turn_no = turn_no;
+			msg.is_events = is_events;
+			msg.chunk = chunk;
+			player.send(msg);
+		};
+
+		for (int waited = 0; waited < timeout_ms; waited += 20)
+		{
+			ShotPathMsg path{};
+			while (player.wait_for<ShotPathMsg>(eMessageType::ShotPath, &path, 0))
+			{
+				if (path.turn_no != turn_no) continue;
+				shot.duplicates += shot.path.count(path.chunk);
+				shot.path[path.chunk] = path;
+				shot.path_chunks = path.path_chunks;
+				shot.event_chunks = path.event_chunks;
+				if (ack) send_ack(false, path.chunk);
+			}
+
+			ShotEventsMsg events{};
+			while (player.wait_for<ShotEventsMsg>(eMessageType::ShotEvents, &events, 0))
+			{
+				if (events.turn_no != turn_no) continue;
+				shot.duplicates += shot.events.count(events.chunk);
+				shot.events[events.chunk] = events;
+				shot.path_chunks = events.path_chunks;
+				shot.event_chunks = events.event_chunks;
+				if (ack) send_ack(true, events.chunk);
+			}
+
+			if (ack && shot.complete()) return true;
+			Sleep(20);
+		}
+
+		return shot.complete();
+	}
+
+	void report_position(ScriptClient& player, const PlayerID pid, const RoomID room, const float x, const float y,
+	                     const float facing = 1.0f, const float pitch = 0.0f)
+	{
+		PositionMsg msg{};
+		msg.type = eMessageType::PositionReport;
+		msg.room_id = room;
+		msg.player_id = pid;
+		msg.object_type = eObjectType::Character;
+		msg.position = {x, y};
+		msg.offset = {facing, pitch};
+		player.send(msg);
+	}
+
+	ShotRequestMsg shot_request(const RoomID room, const PlayerID pid, const uint32_t turn_no, const float x, const float y,
+	                            const float pitch, const float charge,
+	                            const Fortress::eProjectileType kind = Fortress::eProjectileType::Main,
+	                            const eItemType item = eItemType::None)
+	{
+		ShotRequestMsg msg{};
+		msg.type = eMessageType::ShotRequest;
+		msg.room_id = room;
+		msg.player_id = pid;
+		msg.turn_no = turn_no;
+		msg.prj_type = kind;
+		msg.item = item;
+		msg.charged = charge;
+		msg.position = {x, y};
+		msg.facing = 1.0f;
+		msg.pitch = pitch;
+		return msg;
+	}
+
+	// Two players start a match; the server announces turn 1 for player 1
+	// with full hp, and the movement relay still works.
+	bool scenario_client_flow()
+	{
+		constexpr RoomID room = 3;
+		ScriptClient p1(60931);
+		ScriptClient p2(60941);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn)) return fail("p1 got no TurnChange 1");
+		if (!wait_turn(p2, 2, room, 1, &turn)) return fail("p2 got no TurnChange 1");
+		if (turn.current != 1 || turn.count != 2 || turn.hp[0] != 100.0f || turn.hp[1] != 100.0f)
+			return fail("turn 1 should belong to player 1 with both at 100 hp");
+
 		PositionMsg position{};
 		position.type = eMessageType::Position;
 		position.room_id = room;
@@ -251,32 +398,200 @@ namespace
 			relayed.position.get_x() != 123.0f)
 			return fail("p2 did not receive p1's position");
 
+		return true;
+	}
+
+	// Player 1 fires: both players receive the whole shot (path + events),
+	// then turn 2 starts for player 2.
+	bool scenario_shot_flow()
+	{
+		constexpr RoomID room = 4;
+		ScriptClient p1(61001);
+		ScriptClient p2(61011);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+
+		// Standing on the desert stairways (top surface y = -50).
+		report_position(p1, 1, room, -450.0f, -75.0f);
+		report_position(p2, 2, room, 450.0f, -75.0f, -1.0f);
+		Sleep(200);
+
+		p1.send(shot_request(room, 1, 1, -450.0f, -75.0f, 0.0f, 120.0f));
+
+		ReceivedShot s1, s2;
+		if (!collect_shot(p1, 1, room, 1, s1)) return fail("p1 did not get the whole shot");
+		if (!collect_shot(p2, 2, room, 1, s2)) return fail("p2 did not get the whole shot");
+
+		bool exploded = false;
+		for (const auto& e : s2.all_events()) exploded = exploded || e.type == 1;  // Explosion
+		if (!exploded) return fail("shot has no explosion event");
+		if (s1.path.at(0).samples[0].tick != 0) return fail("path does not start at tick 0");
+
+		const int end_tick = s2.path.at(0).end_tick;
+		const int wait_ms = end_tick * 1000 / 60 + 4000;
+		if (!wait_turn(p1, 1, room, 2, &turn, wait_ms) || !wait_turn(p2, 2, room, 2, &turn, 1000))
+			return fail("no turn 2 after the shot");
+		if (turn.current != 2) return fail("turn 2 should belong to player 2");
+		return true;
+	}
+
+	// A direct hit: the damage in the shot events is applied by the server
+	// and announced in the next TurnChange.
+	bool scenario_direct_hit()
+	{
+		constexpr RoomID room = 5;
+		ScriptClient p1(61021);
+		ScriptClient p2(61031);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+
+		// Middle ground top is y = 50; p2 stands right in front of p1.
+		report_position(p1, 1, room, 0.0f, 25.0f, 1.0f, 0.5f);
+		report_position(p2, 2, room, 100.0f, 25.0f, -1.0f);
+		Sleep(200);
+		p1.send(shot_request(room, 1, 1, 0.0f, 25.0f, 0.5f, 100.0f, Fortress::eProjectileType::Sub));
+
+		ReceivedShot shot;
+		if (!collect_shot(p2, 2, room, 1, shot)) return fail("p2 did not get the shot");
+		collect_shot(p1, 1, room, 1, shot, 500);
+
+		float damage = 0.0f;
+		for (const auto& e : shot.all_events())
+		{
+			if (e.type == 2 && e.player == 2) damage += e.value;  // Damage
+		}
+		if (damage <= 0.0f) return fail("no damage to player 2 in the shot events");
+
+		if (!wait_turn(p2, 2, room, 2, &turn, 5000)) return fail("no turn 2");
+		const float hp = turn.players[0] == 2 ? turn.hp[0] : turn.hp[1];
+		std::cout << "damage " << damage << ", p2 hp " << hp << std::endl;
+		return std::fabs(hp - (100.0f - damage)) < 1e-3f || fail("TurnChange hp does not match the damage");
+	}
+
+	// Nobody but the current player can fire, and nobody can fire for
+	// someone else; the old client-reported Damage message is ignored.
+	bool scenario_out_of_turn()
+	{
+		constexpr RoomID room = 6;
+		ScriptClient p1(61041);
+		ScriptClient p2(61051);
+		ScriptClient p3(61061);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+		report_position(p1, 1, room, -450.0f, -75.0f);
+		report_position(p2, 2, room, 450.0f, -75.0f, -1.0f);
+
+		p2.send(shot_request(room, 2, 1, 450.0f, -75.0f, 0.0f, 100.0f));  // not p2's turn
+		p2.send(shot_request(room, 1, 1, -450.0f, -75.0f, 0.0f, 100.0f)); // pretends to be p1
+
+		LobbyInfoMsg lobby{};
+		p3.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 3);
+		p3.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby);
+		p3.send(shot_request(room, 3, 1, 0.0f, 0.0f, 0.0f, 100.0f));      // not in the room
+
 		DamageMsg damage{};
 		damage.type = eMessageType::Damage;
 		damage.room_id = room;
 		damage.player_id = 2;
-		damage.shooter_type = eCharacterType::CannonCharacter;
-		damage.victim_type = eCharacterType::MissileCharacter;
 		damage.prj_owner_id = 1;
-		damage.prj_type = Fortress::eProjectileType::Main;
-		damage.prj_position = {100.0f, 100.0f};
-		damage.ch_position = {100.0f, 130.0f};
+		damage.damage = 99.0f;
 		p2.send(damage);
-		DamageMsg reply{};
-		if (!p2.wait_for<DamageMsg>(eMessageType::Damage, &reply)) return fail("victim got no damage reply");
-		if (!p1.wait_for<DamageMsg>(eMessageType::Damage, &reply)) return fail("shooter got no damage broadcast");
 
-		RspWindMsg wind{};
-		p1.send_header<ReqWindMsg>(eMessageType::ReqWind, room, 1);
-		if (!p1.wait_for<RspWindMsg>(eMessageType::RspWind, &wind)) return fail("p1 got no wind");
+		ReceivedShot shot;
+		if (collect_shot(p1, 1, room, 1, shot, 1000)) return fail("a shot was simulated for a rejected request");
 
-		p1.send_header<TurnEndMsg>(eMessageType::TurnEnd, room, 1);
-		p2.send_header<TurnEndMsg>(eMessageType::TurnEnd, room, 2);
-		GOMsg go{};
-		if (!p1.wait_for<GOMsg>(eMessageType::GO, &go)) return fail("p1 got no GO after turn end");
-		if (!p2.wait_for<GOMsg>(eMessageType::GO, &go)) return fail("p2 got no GO after turn end");
-
+		DebugStateRspMsg state{};
+		if (!p1.request_state(room, &state)) return fail("no debug state reply");
+		if (state.turn_no != 1 || state.current_player != 1) return fail("turn changed after rejected requests");
+		for (int i = 0; i < state.slot_count; ++i)
+		{
+			if (state.slots[i].hp != 100.0f) return fail("hp changed after rejected requests");
+		}
 		return true;
+	}
+
+	// If a client does not acknowledge, the server resends the chunks.
+	bool scenario_shot_resend()
+	{
+		constexpr RoomID room = 7;
+		ScriptClient p1(61071);
+		ScriptClient p2(61081);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+		report_position(p1, 1, room, -450.0f, -75.0f);
+		report_position(p2, 2, room, 450.0f, -75.0f, -1.0f);
+		Sleep(200);
+		p1.send(shot_request(room, 1, 1, -450.0f, -75.0f, 0.0f, 120.0f));
+
+		ReceivedShot silent;
+		collect_shot(p2, 2, room, 1, silent, 1200, false);  // receive without acking
+		if (silent.duplicates == 0) return fail("server did not resend unacknowledged chunks");
+
+		ReceivedShot shot;
+		if (!collect_shot(p2, 2, room, 1, shot, 2000)) return fail("chunks stopped arriving");
+		std::cout << "duplicates while silent: " << silent.duplicates << std::endl;
+		return true;
+	}
+
+	// A player may report only its own fall. When one player is left the
+	// match ends with that player as the winner.
+	bool scenario_death_report()
+	{
+		constexpr RoomID room = 8;
+		ScriptClient p1(61091);
+		ScriptClient p2(61101);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+
+		DestroyedMsg fake{};
+		fake.type = eMessageType::Destroyed;
+		fake.room_id = room;
+		fake.player_id = 2;
+		fake.object_type = eObjectType::Character;
+		fake.object_player_id = 1;  // p2 claims p1 fell
+		p2.send(fake);
+
+		DestroyedMsg fell = fake;
+		fell.player_id = 1;
+		fell.object_player_id = 1;  // p1 reports its own fall on its own turn
+		p1.send(fell);
+
+		if (!wait_turn(p2, 2, room, 2, &turn, 3000)) return fail("no TurnChange after the fall");
+		if (turn.current != -1 || turn.winner != 2) return fail("player 2 should have won (current " +
+			std::to_string(turn.current) + ", winner " + std::to_string(turn.winner) + ")");
+		return true;
+	}
+
+	// The server ends a turn after 60 s without a shot.
+	bool scenario_turn_timeout()
+	{
+		constexpr RoomID room = 9;
+		ScriptClient p1(61111);
+		ScriptClient p2(61121);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+
+		std::cout << "waiting for the 60 s turn limit..." << std::endl;
+		for (int i = 0; i < 58; ++i)
+		{
+			p1.send_header<PingMsg>(eMessageType::PING, -1, 1);
+			p2.send_header<PingMsg>(eMessageType::PING, -1, 2);
+			Sleep(1000);
+		}
+		if (!wait_turn(p2, 2, room, 2, &turn, 5000)) return fail("turn did not time out");
+		return turn.current == 2 || fail("turn 2 should belong to player 2");
 	}
 
 	// Ids out of range, unknown player ids and out-of-range indices inside
@@ -377,55 +692,15 @@ namespace
 		return (slot != nullptr && slot->port == other.port()) || fail("player 1 not rebound to the new address");
 	}
 
-	// Room messages are accepted only from a member of the room, with the
-	// player id bound to the sender.
-	bool scenario_room_membership()
-	{
-		constexpr RoomID room = 0;
-		ScriptClient p1(60981);
-		ScriptClient p2(60991);
-		LobbyInfoMsg lobby{};
-		RoomInfoMsg info{};
-
-		p1.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 1);
-		if (!p1.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby)) return fail("p1 got no LobbyInfo");
-		p1.send_header<RoomJoinMsg>(eMessageType::RoomJoin, room, 1);
-		if (!p1.wait_for<RoomInfoMsg>(eMessageType::RoomInfo, &info)) return fail("p1 got no RoomInfo");
-		p2.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 2);
-		if (!p2.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby)) return fail("p2 got no LobbyInfo");
-
-		const auto double_damage = [&](const PlayerID pid)
-		{
-			ItemMsg item{};
-			item.type = eMessageType::Item;
-			item.room_id = room;
-			item.player_id = pid;
-			item.item_type = eItemType::DoubleDamage;
-			p2.send(item);
-		};
-
-		double_damage(2);  // p2 is not in the room yet
-		double_damage(1);  // p2 pretends to be p1
-		Sleep(300);
-
-		p2.send_header<RoomJoinMsg>(eMessageType::RoomJoin, room, 2);
-		if (!p2.wait_for<RoomInfoMsg>(eMessageType::RoomInfo, &info)) return fail("p2 got no RoomInfo");
-
-		DebugStateRspMsg state{};
-		if (!p1.request_state(room, &state)) return fail("no debug state reply");
-
-		const auto* s1 = find_slot(state, 1);
-		const auto* s2 = find_slot(state, 2);
-		if (s1 == nullptr || s2 == nullptr) return fail("both players should be in the room");
-		if (s2->double_damage) return fail("item from a non-member was applied");
-		if (s1->double_damage) return fail("item sent with another player's id was applied");
-		return true;
-	}
-
 	const std::map<std::string, std::function<bool()>> scenarios = {
 		{"bad-ids", scenario_bad_ids},
 		{"session-takeover", scenario_session_takeover},
-		{"room-membership", scenario_room_membership},
+		{"shot-flow", scenario_shot_flow},
+		{"direct-hit", scenario_direct_hit},
+		{"out-of-turn", scenario_out_of_turn},
+		{"shot-resend", scenario_shot_resend},
+		{"death-report", scenario_death_report},
+		{"turn-timeout", scenario_turn_timeout},
 		{"smoke", scenario_smoke},
 		{"spoof-room-slot", scenario_spoof_room_slot},
 		{"client-flow", scenario_client_flow},
