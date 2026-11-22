@@ -190,6 +190,7 @@
     <ClInclude Include="Round.h" />
     <ClInclude Include="scene.hpp" />
     <ClInclude Include="sceneManager.hpp" />
+    <ClInclude Include="KeyHelp.hpp" />
     <ClInclude Include="MapLayout.hpp" />
     <ClInclude Include="PropertyTable.hpp" />
     <ClInclude Include="Sim\SimData.hpp" />

@@ -1,4 +1,5 @@
 #include "RoomScene.h"
+#include "../Common/KeyHelp.hpp"
 
 #include "application.h"
 #include "BulletinBoardScene.h"
@@ -29,6 +30,7 @@ void Fortress::Scene::RoomScene::load_and_sync_map(const Network::GameInitMsg& g
 void Fortress::Scene::RoomScene::update()
 {
 	scene::update();
+	KeyHelp::update();
 	Network::GameInitMsg gis{};
 
 	if (Input::getKey(eKeyCode::S))
@@ -122,6 +124,12 @@ void Fortress::Scene::RoomScene::render()
 	scene::render();
 
 	m_imBackground.lock()->render({0, -20.f}, m_imBackground.lock()->get_hitbox());
+
+	KeyHelp::render({
+		L"\uce90\ub9ad\ud130: 1 \uce90\ub17c, 2 \ubbf8\uc0ac\uc77c, 3 \uc138\ud06c\uc708\ub4dc",
+		L"\uc544\uc774\ud15c \uce78 1-4: Q \ub354\ube14\uc0f7, W \ud154\ub808\ud3ec\ud2b8, E \uc218\ub9ac, R \ub354\ube14\ub370\ubbf8\uc9c0",
+		L"\uc2dc\uc791: D \uc0ac\ub9c9 \ub9f5, S \ud558\ub298 \uacc4\uace1 \ub9f5 (\ub450 \uba85\uc774 \ub2e4 \ub4e4\uc5b4\uc628 \ub4a4 \ud55c \uba85\uc774)",
+	});
 }
 
 void Fortress::Scene::RoomScene::deactivate()

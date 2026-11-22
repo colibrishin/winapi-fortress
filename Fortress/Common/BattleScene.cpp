@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include "item.hpp"
+#include "KeyHelp.hpp"
 #include "message.hpp"
 #include "objectManager.hpp"
 #include "Radar.h"
@@ -65,6 +66,7 @@ namespace Fortress::Scene
 	void BattleScene::update()
 	{
 		scene::update();
+		KeyHelp::update();
 		m_round->update();
 		m_radar->update();
 	}
@@ -275,6 +277,23 @@ namespace Fortress::Scene
 		}
 		
 		m_radar->render();
+
+		std::wstring turn_line = L"\ub300\uae30 \uc911";
+		if (const auto current = m_round->get_current_player().lock())
+		{
+			turn_line = L"\uc9c0\uae08 \ucc28\ub840: \ud50c\ub808\uc774\uc5b4 " + std::to_wstring(current->get_player_id()) +
+				(current->is_localplayer() ? L" (\ub098)" : L" (\uc0c1\ub300)");
+		}
+
+		KeyHelp::render({
+			turn_line,
+			L"A / D: \uc774\ub3d9 (\ub0b4 \ucc28\ub840\uc5d0\ub9cc)",
+			L"\u2191 / \u2193: \uc870\uc900 \uac01\ub3c4",
+			L"SPACE: \ub204\ub974\uace0 \uc788\ub2e4\uac00 \ub5bc\uba74 \ubc1c\uc0ac (\uc624\ub798 \ub204\ub97c\uc218\ub85d \uc138\uac8c)",
+			L"TAB: \uc8fc\ud3ec / \ubcf4\uc870\ud3ec \ubc14\uafb8\uae30",
+			L"1-4: \uc544\uc774\ud15c \uace0\ub978 \ub4a4 SPACE (\uc218\ub9ac\ub294 \ubc14\ub85c \uc0ac\uc6a9)",
+			L"\uc785\ub825\uc740 \ud074\ub9ad\ud574 \ub454 \ucc3d\uc5d0\ub9cc \ub4e4\uc5b4\uac00\uc694",
+		});
 	}
 
 	void BattleScene::deactivate()

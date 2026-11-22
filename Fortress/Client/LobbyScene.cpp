@@ -1,4 +1,5 @@
 #include "LobbyScene.h"
+#include "../Common/KeyHelp.hpp"
 
 #include "application.h"
 #include "../Common/input.hpp"
@@ -19,6 +20,7 @@ void Fortress::Scene::LobbyScene::initialize()
 void Fortress::Scene::LobbyScene::update()
 {
 	scene::update();
+	KeyHelp::update();
 
 	if (Input::getKey(eKeyCode::SPACE))
 	{
@@ -49,6 +51,10 @@ void Fortress::Scene::LobbyScene::render()
 			Debug::Log(name);
 		}
 	}
+
+	KeyHelp::render({
+		L"SPACE: \ubc29\uc5d0 \ub4e4\uc5b4\uac00\uae30",
+	});
 }
 
 void Fortress::Scene::LobbyScene::deactivate()
