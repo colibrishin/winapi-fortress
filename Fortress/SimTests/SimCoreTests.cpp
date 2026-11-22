@@ -490,6 +490,28 @@ namespace
 		expect(45.0f + 0.2f * 180.0f / pi, 0, range, seconds, apex);
 		check(std::fabs(sloped.seconds - seconds) < 0.03f, "aim is added to the barrel slope");
 
+		// A slow guided missile locked on a tank above it must still reach
+		// it (it used to hover under the target until the 30 s limit).
+		{
+			SimWorld w;
+			w.map_height = 2000.0f;
+			SimCharacter shooter;
+			shooter.id = 1;
+			shooter.type = CharacterType::Missile;
+			SimCharacter target;
+			target.id = 2;
+			target.position = {60.0f, -120.0f};
+			w.characters = {shooter, target};
+
+			ShotInput input;
+			input.shooter = 1;
+			input.kind = ShotKind::Sub;
+			input.charge = min_charge;
+			input.aim_degree = 60.0f;
+			const ShotResult r = simulate_shot(w, input);
+			check(!r.timed_out && count(r, ShotEventType::Damage, 2) == 1, "slow guided missile reaches a target above it");
+		}
+
 		const Flight sub = fly(CharacterType::Cannon, ShotKind::Sub, max_charge, 45.0f, 0);
 		check(std::fabs(sub.range - f45.range * 1.1f * 1.1f) < 3.0f, "launch_scale scales the speed (range by its square)");
 	}

@@ -408,8 +408,10 @@ namespace Fortress::Sim
 					{
 						const Box t = nearest->box();
 						const Vec2 target = going_left ? Vec2{t.top_left().x, t.bottom_right().y} : t.bottom_right();
-						// Turn toward the target, keeping the speed.
-						prj.velocity = (target - lead).normalized() * prj.velocity.magnitude();
+						// Turn toward the target at no less than the launch speed;
+						// keeping only the current speed lets gravity cancel a
+						// slow climb and the missile hovers below the target.
+						prj.velocity = (target - lead).normalized() * std::max(prj.velocity.magnitude(), launch_speed);
 					}
 				}
 
