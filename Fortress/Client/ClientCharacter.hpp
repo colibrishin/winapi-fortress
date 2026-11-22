@@ -73,7 +73,8 @@ namespace Fortress::Network::Client::Object
 		EngineHandle::get_messenger()->send_shot_request(
 			get_projectile_type(),
 			item ? item->get_item_type() : eItemType::None,
-			get_charged_power());
+			get_charged_power(),
+			get_offset().get_x());
 
 		// Items are reusable (test cheat): only disarm it for this shot.
 		if (item)
@@ -88,8 +89,13 @@ namespace Fortress::Network::Client::Object
 	{
 		constexpr float repeat_interval = 0.1f;
 
+		// A/D only walk from Idle or Move (not while charging or firing).
+		const auto state = get_state();
+		const bool can_walk = state == eCharacterState::Idle || state == eCharacterState::IdleLow ||
+			state == eCharacterState::Move || state == eCharacterState::MoveLow;
+
 		uint8_t input = 0;
-		if (is_movable_localplayer())
+		if (is_movable_localplayer() && can_walk)
 		{
 			if (Input::getKey(eKeyCode::A))
 			{

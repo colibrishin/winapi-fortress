@@ -382,6 +382,7 @@ namespace
 		msg.prj_type = kind;
 		msg.item = item;
 		msg.charged = charge;
+		msg.facing = 1.0f;
 		return msg;
 	}
 
@@ -578,6 +579,14 @@ namespace
 		if (!wait_turn(p1, 1, room, 2, &turn, 15000)) return fail("no TurnChange after the fall");
 		if (turn.current != -1 || turn.winner != 1) return fail("player 1 should have won (current " +
 			std::to_string(turn.current) + ", winner " + std::to_string(turn.winner) + ")");
+
+		// After the match the server stops sending positions.
+		Sleep(200);
+		CharacterStateMsg cs{};
+		while (p1.wait_for<CharacterStateMsg>(eMessageType::CharacterState, &cs, 0)) {}
+		Sleep(500);
+		if (p1.wait_for<CharacterStateMsg>(eMessageType::CharacterState, &cs, 300))
+			return fail("CharacterState still sent after the match");
 		return true;
 	}
 

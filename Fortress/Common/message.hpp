@@ -305,6 +305,7 @@ namespace Fortress::Network
 		eProjectileType prj_type;
 		eItemType item;
 		float charged;
+		float facing;  // +1 right, -1 left: a quick turn may not reach the server's walk
 	};
 
 	// Client -> server: held movement key (0 none, 1 left, 2 right). Sent on
@@ -334,6 +335,9 @@ namespace Fortress::Network
 
 		uint32_t turn_no;
 		uint32_t tick;
+		// Turn of the last simulated shot: until a client has replayed it,
+		// these positions already contain its result.
+		uint32_t shot_turn;
 		uint8_t count;
 		Entry entries[15];
 	};

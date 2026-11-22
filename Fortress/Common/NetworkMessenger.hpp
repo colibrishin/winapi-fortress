@@ -43,7 +43,7 @@ namespace Fortress::Network
 		bool check_game_start(GameStartMsg& gsm);
 
 		// Server-authoritative turns and shots.
-		void send_shot_request(eProjectileType prj_type, eItemType item, float charged);
+		void send_shot_request(eProjectileType prj_type, eItemType item, float charged, float facing);
 		// Held movement key: 0 none, 1 left, 2 right (Sim::MoveInput).
 		void send_move_input(uint8_t input);
 		bool pop_character_state(CharacterStateMsg* out);

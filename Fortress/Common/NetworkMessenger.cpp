@@ -183,7 +183,8 @@ namespace Fortress::Network
 			projectile->room_id == m_rood_id_;
 	}
 
-	void NetworkMessenger::send_shot_request(const eProjectileType prj_type, const eItemType item, const float charged)
+	void NetworkMessenger::send_shot_request(
+		const eProjectileType prj_type, const eItemType item, const float charged, const float facing)
 	{
 		ShotRequestMsg msg{};
 		msg.type = eMessageType::ShotRequest;
@@ -193,6 +194,7 @@ namespace Fortress::Network
 		msg.prj_type = prj_type;
 		msg.item = item;
 		msg.charged = charged;
+		msg.facing = facing;
 
 		m_pending_shot_request = create_prewritten_network_message<ShotRequestMsg>(msg);
 		m_shot_request_pending = true;

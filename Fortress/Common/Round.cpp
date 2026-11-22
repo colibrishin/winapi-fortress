@@ -2,6 +2,7 @@
 #include "Round.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 
@@ -464,7 +465,8 @@ namespace Fortress
 
 		// While replaying, the clients' own physics drops characters into
 		// the new craters; the server catches up after the replay.
-		if (!any || m_replaying || latest.tick <= m_replay_state_tick || latest.tick < m_state_tick)
+		const bool shot_not_replayed = latest.shot_turn == m_turn_no && latest.shot_turn != 0 && !m_replayed;
+		if (!any || m_replaying || shot_not_replayed || latest.tick <= m_replay_state_tick || latest.tick < m_state_tick)
 		{
 			return;
 		}
@@ -475,6 +477,11 @@ namespace Fortress
 		for (int i = 0; i < count; ++i)
 		{
 			const auto& e = latest.entries[i];
+			if (!std::isfinite(e.x) || !std::isfinite(e.y))
+			{
+				continue;
+			}
+
 			if (const auto ch = find_player(e.pid))
 			{
 				if (!e.alive)

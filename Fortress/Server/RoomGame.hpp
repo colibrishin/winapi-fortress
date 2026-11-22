@@ -141,9 +141,15 @@ namespace Fortress::Network::Server
 			// Fires from where the server has the character.
 			// set_unmovable(): a walking shooter stops.
 			m_input = Sim::MoveInput::None;
-			if (Sim::SimCharacter* shooter = m_world.find(pid); shooter->state == Sim::CharacterState::Move)
+			// The client fires from Idle (not walking), facing its own way.
+			if (Sim::SimCharacter* shooter = m_world.find(pid))
 			{
-				Sim::MoveDetail::stop(*shooter);
+				if (shooter->state == Sim::CharacterState::Move)
+				{
+					Sim::MoveDetail::stop(*shooter);
+				}
+				shooter->state = Sim::CharacterState::Idle;
+				shooter->facing = request.facing < 0.0f ? -1.0f : 1.0f;
 			}
 
 			Sim::ShotInput input;
@@ -191,7 +197,18 @@ namespace Fortress::Network::Server
 				input.teleport ? eProjectileType::Nutshell :
 				input.kind == Sim::ShotKind::Sub ? eProjectileType::Sub : eProjectileType::Main);
 			m_phase = Phase::Replaying;
-			m_replay_end_at = now + seconds(m_last_shot.end_tick * Sim::tick_seconds);
+			// Characters may fall once the clients' replay reaches the first
+			// crater (clients ignore positions while they replay).
+			int first_explosion = m_last_shot.end_tick;
+			for (const auto& e : m_last_shot.events)
+			{
+				if (e.type == Sim::ShotEventType::Explosion)
+				{
+					first_explosion = std::min(first_explosion, e.tick);
+				}
+			}
+			m_shot_turn = m_turn_no;
+			m_replay_end_at = now + seconds(first_explosion * Sim::tick_seconds);
 			m_next_turn_at = m_replay_end_at + seconds(next_turn_delay_seconds);
 
 			build_shot_chunks(pid);
@@ -246,7 +263,7 @@ namespace Fortress::Network::Server
 
 			step_movement(now);
 
-			if (now - m_last_state_send >= state_interval)
+			if (m_phase != Phase::Over && now - m_last_state_send >= state_interval)
 			{
 				send_state();
 				m_last_state_send = now;
@@ -319,6 +336,7 @@ namespace Fortress::Network::Server
 		void check_falls(const Clock::time_point now)
 		{
 			int alive = 0;
+			bool fell = false;
 			bool current_died = false;
 
 			for (auto& ch : m_world.characters)
@@ -327,13 +345,14 @@ namespace Fortress::Network::Server
 				{
 					// Fell out of the map (step_character cleared alive).
 					ch.hp = 0.0f;
+					fell = true;
 					current_died = current_died || ch.id == m_current;
 					std::cout << "Room " << m_room << ": player " << ch.id << " fell" << std::endl;
 				}
 				alive += ch.alive ? 1 : 0;
 			}
 
-			if (m_phase == Phase::Aiming && (current_died || alive <= 1))
+			if (m_phase == Phase::Aiming && fell && (current_died || alive <= 1))
 			{
 				m_phase = Phase::Replaying;
 				m_input = Sim::MoveInput::None;
@@ -350,6 +369,7 @@ namespace Fortress::Network::Server
 			msg.player_id = -1;
 			msg.turn_no = m_turn_no;
 			msg.tick = m_tick;
+			msg.shot_turn = m_shot_turn;
 
 			for (const auto& ch : m_world.characters)
 			{
@@ -565,6 +585,7 @@ namespace Fortress::Network::Server
 		Clock::time_point m_replay_end_at{};
 		Clock::time_point m_last_state_send{};
 		uint32_t m_tick = 0;
+		uint32_t m_shot_turn = 0;
 
 		uint32_t m_turn_no = 0;
 		PlayerID m_current = -1;

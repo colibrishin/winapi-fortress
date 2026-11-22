@@ -130,22 +130,26 @@ namespace Fortress::ObjectBase
 			return;
 		}
 
-		set_server_mp(mp);
-
 		if (is_localplayer())
 		{
+			// While walking, the local mp is the prediction; the server's lags.
+			if (!is_movable_localplayer())
+			{
+				set_server_mp(mp);
+			}
+
 			const float deviation = (position - m_position).magnitude();
 			m_max_server_deviation = std::max(m_max_server_deviation, deviation);
 
 			if (deviation > local_correction_distance)
 			{
 				m_position = position;
-				reset_current_gravity_speed();
 				m_server_corrections++;
 			}
 			return;
 		}
 
+		set_server_mp(mp);
 		m_position = position;
 		reset_current_gravity_speed();
 		set_offset(facing < 0.0f ? Math::left : Math::right);
