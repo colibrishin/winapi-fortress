@@ -2,6 +2,7 @@
 #define OBJECT_HPP
 #pragma once
 
+#include <algorithm>
 #include <memory>
 
 #include "vector2.hpp"
