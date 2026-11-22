@@ -124,6 +124,8 @@ namespace Fortress
 		// only from set_virtual_key: the real keyboard is ignored and input is
 		// read even when the window has no focus.
 		inline static void enable_virtual_input();
+		// Back to the real keyboard (Autoplay "manual" step).
+		inline static void disable_virtual_input();
 		inline static void set_virtual_key(eKeyCode code, bool pressed);
 
 	private:
@@ -201,6 +203,12 @@ namespace Fortress
 	void Input::enable_virtual_input()
 	{
 		m_virtual_input = true;
+		m_virtual_pressed.assign(m_keys.size(), false);
+	}
+
+	void Input::disable_virtual_input()
+	{
+		m_virtual_input = false;
 		m_virtual_pressed.assign(m_keys.size(), false);
 	}
 

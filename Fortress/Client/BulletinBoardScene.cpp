@@ -1,4 +1,5 @@
 #include "BulletinBoardScene.h"
+#include "../Common/KeyHelp.hpp"
 
 #include "../Common/input.hpp"
 #include "../Common/resourceManager.hpp"
@@ -16,6 +17,7 @@ void Fortress::Scene::BulletinBoardScene::initialize()
 void Fortress::Scene::BulletinBoardScene::update()
 {
 	scene::update();
+	KeyHelp::update();
 
 	if (Input::getKey(eKeyCode::ENTER))
 	{
@@ -28,6 +30,10 @@ void Fortress::Scene::BulletinBoardScene::render()
 	scene::render();
 
 	m_imBackground.lock()->render({0, -20.f}, m_imBackground.lock()->get_hitbox());
+
+	KeyHelp::render({
+		L"ENTER: \ub85c\ube44\ub85c",
+	});
 }
 
 void Fortress::Scene::BulletinBoardScene::deactivate()
