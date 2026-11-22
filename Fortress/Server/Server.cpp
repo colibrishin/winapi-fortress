@@ -319,13 +319,21 @@ namespace Fortress::Network::Server
 		for(const auto& client : room_clients)
 		{
 			gi.players[pos] = client.pid;
-			if (client.room_info.character == eCharacterType::None)
+
+			// A player who never picked a character has a zero-initialised
+			// value, which is not eCharacterType::None; the client then created
+			// no character and crashed. Anything that is not a playable type
+			// becomes the cannon.
+			switch (client.room_info.character)
 			{
-				gi.character_type[pos] = eCharacterType::CannonCharacter;
-			}
-			else
-			{
+			case eCharacterType::CannonCharacter:
+			case eCharacterType::MissileCharacter:
+			case eCharacterType::SecwindCharacter:
 				gi.character_type[pos] = client.room_info.character;
+				break;
+			default:
+				gi.character_type[pos] = eCharacterType::CannonCharacter;
+				break;
 			}
 
 			std::copy(std::begin(client.room_info.items), std::end(client.room_info.items), gi.equied_item[pos]);

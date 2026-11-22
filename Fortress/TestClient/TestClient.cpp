@@ -228,6 +228,9 @@ namespace
 		if (!p2.wait_for<GameInitMsg>(eMessageType::GameInit, &init)) return fail("p2 got no GameInit");
 		if (init.player_count != 2 || init.character_type[1] != eCharacterType::MissileCharacter)
 			return fail("GameInit does not carry both players and p2's character");
+		if (init.character_type[0] != eCharacterType::CannonCharacter)
+			return fail("p1 picked no character and should get the cannon, got " +
+				std::to_string(static_cast<int>(init.character_type[0])));
 
 		p1.send_header<LoadDoneMsg>(eMessageType::LoadDone, room, 1);
 		p2.send_header<LoadDoneMsg>(eMessageType::LoadDone, room, 2);
