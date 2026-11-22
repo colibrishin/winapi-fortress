@@ -47,6 +47,16 @@ namespace Fortress::Network::Server
 
 	const std::map<PlayerID, std::wstring> client_names = {{1, L"Test1"}, {2, L"Test2"}};
 
+	// Room and player ids index fixed arrays below. -1 is the lobby.
+	constexpr int max_rooms = 15;
+	constexpr int max_players = 15;
+
+	std::wstring player_name(const PlayerID pid)
+	{
+		const auto it = client_names.find(pid);
+		return it != client_names.end() ? it->second : L"Player" + std::to_wstring(pid);
+	}
+
 	static std::mutex player_list_lock;
 	static bool player_list[15]{ false, };
 	static bool load_done[15][15] { false, };
@@ -156,10 +166,8 @@ namespace Fortress::Network::Server
 
 			for(const auto& client : clients)
 			{
-				std::wmemcpy(
-					player_names[pos],
-					client_names.at(client.pid).c_str(),
-					client_names.at(client.pid).length());
+				const std::wstring name = player_name(client.pid).substr(0, 14);
+				std::wmemcpy(player_names[pos], name.c_str(), name.length());
 				pos++;
 			}
 		}
@@ -189,73 +197,12 @@ namespace Fortress::Network::Server
 		}
 	}
 
-	[[noreturn]] void lobby_info_schedule()
-	{
-		while(true)
-		{
-			broadcast_lobby_info();
-			Sleep(3000);
-		}
-	}
-
 	void add_player(PlayerID player_id)
 	{
 		std::cout << "Add to lobby player list..." << std::endl;
 		{
 			std::lock_guard _(player_list_lock);
 			player_list[player_id] = true;
-		}
-	}
-
-	[[noreturn]] void cleanup_bad_clients()
-	{
-		while(true)
-		{
-			{
-				std::unique_lock list_lock(server_socket.bad_client_lock);
-				server_socket.m_bad_client_event.wait(list_lock);
-
-				while (!server_socket.m_bad_client_list.empty())
-				{
-					const auto bad_client = *server_socket.m_bad_client_list.begin();
-					// There can be multiple room id + player id. This should be blocked or cleaned up somehow.
-					std::pair<RoomID, PlayerID> target_key_pair = {-1, -1};
-
-					for(const auto& [key_pair, client] : client_list)
-					{
-						if(std::memcmp(&client.ip, &bad_client, sizeof(sockaddr_in)) == 0)
-						{
-							target_key_pair = key_pair;
-							break;
-						}
-					}
-
-					if (target_key_pair.second != -1)
-					{
-						client_list.erase(target_key_pair);
-					}
-
-					server_socket.m_bad_client_list.erase(
-						server_socket.m_bad_client_list.begin());
-				}
-			}
-
-			std::pair<RoomID, PlayerID> target_key_pair = {-1, -1};
-
-			for(const auto& [key_pair, client] : client_list)
-			{
-				if(difftime(client.last_contact,get_time()) >= 60000)
-				{
-					// @todo: send challenge.
-					target_key_pair = key_pair;
-					break;
-				}
-			}
-
-			if(target_key_pair.second != -1)
-			{
-				client_list.erase(target_key_pair);
-			}
 		}
 	}
 
@@ -281,10 +228,8 @@ namespace Fortress::Network::Server
 
 		for(const auto& client : room_clients)
 		{
-			std::wmemcpy(
-				rif.player_names[count],
-				client_names.at(client.pid).c_str(),
-				client_names.at(client.pid).length());
+			const std::wstring name = player_name(client.pid).substr(0, 14);
+			std::wmemcpy(rif.player_names[count], name.c_str(), name.length());
 			count++;
 		}
 
@@ -307,10 +252,8 @@ namespace Fortress::Network::Server
 
 		for(const auto& client : room_clients)
 		{
-			std::wmemcpy(
-				rif.player_names[count],
-				client_names.at(client.pid).c_str(),
-				client_names.at(client.pid).length());
+			const std::wstring name = player_name(client.pid).substr(0, 14);
+			std::wmemcpy(rif.player_names[count], name.c_str(), name.length());
 			count++;
 		}
 
@@ -347,6 +290,11 @@ namespace Fortress::Network::Server
 		const unsigned int it_idx = reinterpret_cast<const RoomSelectItMsg*>(message)->index;
 		const eItemType it_type = reinterpret_cast<const RoomSelectItMsg*>(message)->item_type;
 		std::cout << static_cast<int>(it_type) << std::endl;
+
+		if (it_idx >= std::size(client_list[{room_id, player_id}].room_info.items))
+		{
+			return;
+		}
 
 		client_list[{room_id, player_id}].room_info.items[it_idx] = it_type;
 	}
@@ -535,6 +483,12 @@ namespace Fortress::Network::Server
 	void calculate_damage_and_reply(Message* message, const sockaddr_in& client_info)
 	{
 		auto* casted = reinterpret_cast<DamageMsg*>(message);
+
+		if (casted->prj_owner_id < 0 || casted->prj_owner_id >= max_players)
+		{
+			return;
+		}
+
 		auto& dd = double_damage_enabled[casted->room_id][casted->prj_owner_id];
 
 		const float damage = calculate_damage(
@@ -611,10 +565,199 @@ namespace Fortress::Network::Server
 		server_socket.send_message<DebugStateRspMsg>(&reply, client_info);
 	}
 
+	// Which source address speaks for which player. A player id is claimed
+	// by PING or LobbyJoin from an address and stays bound to it while that
+	// address keeps talking; every other message must come from the bound
+	// address with the same player id, so a client cannot act as someone else.
+	struct Session
+	{
+		PlayerID pid;
+		std::chrono::steady_clock::time_point last_seen;
+	};
+
+	// A silent binding can be taken over after this (e.g. a restarted client
+	// on a new port).
+	constexpr auto session_timeout = std::chrono::seconds(5);
+
+	static std::map<uint64_t, Session> sessions;
+	static std::map<PlayerID, uint64_t> session_by_pid;
+
+	uint64_t address_key(const sockaddr_in& address)
+	{
+		return static_cast<uint64_t>(address.sin_addr.s_addr) << 16 | ntohs(address.sin_port);
+	}
+
+	void release_session(const uint64_t key)
+	{
+		const auto it = sessions.find(key);
+		if (it == sessions.end())
+		{
+			return;
+		}
+
+		const auto owner = session_by_pid.find(it->second.pid);
+		if (owner != session_by_pid.end() && owner->second == key)
+		{
+			session_by_pid.erase(owner);
+		}
+
+		sessions.erase(it);
+	}
+
+	bool is_client_message(const eMessageType type)
+	{
+		switch (type)
+		{
+		case eMessageType::PING:
+		case eMessageType::LobbyJoin:
+		case eMessageType::RoomJoin:
+		case eMessageType::RoomSelectCh:
+		case eMessageType::RoomSelectIt:
+		case eMessageType::RoomStart:
+		case eMessageType::LoadDone:
+		case eMessageType::DeltaTime:
+		case eMessageType::Position:
+		case eMessageType::Stop:
+		case eMessageType::Firing:
+		case eMessageType::Fire:
+		case eMessageType::ProjectileSelect:
+		case eMessageType::Item:
+		case eMessageType::ItemFire:
+		case eMessageType::Hit:
+		case eMessageType::Damage:
+		case eMessageType::Destroyed:
+		case eMessageType::ReqWind:
+		case eMessageType::TurnEnd:
+		case eMessageType::ProjectileFire:
+		case eMessageType::ProjectileFlying:
+		case eMessageType::ProjectileHit:
+		case eMessageType::DebugStateReq:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	// Decides whether a message may be processed. Checks the ids are in
+	// range, binds or verifies the sender's player id, and requires
+	// room-scoped messages to come from a member of that room.
+	bool authorize(const Message* message, const sockaddr_in& from)
+	{
+		const eMessageType type = message->type;
+		const PlayerID pid = message->player_id;
+		const RoomID room = message->room_id;
+
+		if (!is_client_message(type))
+		{
+			return false;
+		}
+
+		if (type == eMessageType::DebugStateReq)
+		{
+			return debug_state_enabled;
+		}
+
+		if (pid < 0 || pid >= max_players || room < -1 || room >= max_rooms)
+		{
+			std::cout << "Rejected: id out of range (room " << room << ", player " << pid << ")" << std::endl;
+			return false;
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		const uint64_t key = address_key(from);
+		const auto session = sessions.find(key);
+		const bool claims = type == eMessageType::PING || type == eMessageType::LobbyJoin;
+
+		if (session != sessions.end() && session->second.pid == pid)
+		{
+			session->second.last_seen = now;
+		}
+		else if (claims)
+		{
+			// Take the player id if nobody holds it or its holder went silent.
+			const auto owner = session_by_pid.find(pid);
+			if (owner != session_by_pid.end())
+			{
+				const auto& holder = sessions.at(owner->second);
+				if (now - holder.last_seen < session_timeout)
+				{
+					std::cout << "Rejected: player " << pid << " is bound to another address" << std::endl;
+					return false;
+				}
+				release_session(owner->second);
+			}
+
+			release_session(key);
+			sessions[key] = {pid, now};
+			session_by_pid[pid] = key;
+		}
+		else
+		{
+			std::cout << "Rejected: message type 0x" << std::hex << static_cast<int>(type) << std::dec
+				<< " for player " << pid << " from an address not bound to it" << std::endl;
+			return false;
+		}
+
+		if (claims)
+		{
+			return true;
+		}
+
+		if (room < 0)
+		{
+			std::cout << "Rejected: room message without a room" << std::endl;
+			return false;
+		}
+
+		if (type == eMessageType::RoomJoin)
+		{
+			return true;
+		}
+
+		const auto member = client_list.find({room, pid});
+		if (member == client_list.end() || address_key(member->second.ip) != key)
+		{
+			std::cout << "Rejected: player " << pid << " is not in room " << room << std::endl;
+			return false;
+		}
+
+		return true;
+	}
+
+	void drop_bad_clients()
+	{
+		std::lock_guard _(server_socket.bad_client_lock);
+
+		for (const auto& bad_client : server_socket.m_bad_client_list)
+		{
+			for (auto it = client_list.begin(); it != client_list.end();)
+			{
+				it = address_key(it->second.ip) == address_key(bad_client) ? client_list.erase(it) : std::next(it);
+			}
+
+			release_session(address_key(bad_client));
+		}
+
+		server_socket.m_bad_client_list.clear();
+	}
+
+	// The only thread that touches game state: handles every received
+	// message, then periodic work (lobby broadcast, bad client cleanup).
 	[[noreturn]] void consume_message()
 	{
+		constexpr auto lobby_broadcast_interval = std::chrono::seconds(3);
+		auto next_lobby_broadcast = std::chrono::steady_clock::now();
+
 		while(true) 
 		{
+			if (std::chrono::steady_clock::now() >= next_lobby_broadcast)
+			{
+				broadcast_lobby_info();
+				next_lobby_broadcast = std::chrono::steady_clock::now() + lobby_broadcast_interval;
+			}
+
+			drop_bad_clients();
+
 			char buffer[max_packet_size + 1]{};
 			sockaddr_in client_info{};
 			std::time_t time;
@@ -622,10 +765,16 @@ namespace Fortress::Network::Server
 			if(!server_socket.get_any_message(&client_info, time, buffer))
 			{
 				server_socket.block_until_queue_event();
+				continue;
 			}
 
 			const Message* message = reinterpret_cast<Message*>(buffer);
 			auto* writable_message = reinterpret_cast<Message*>(buffer);
+
+			if (!authorize(message, client_info))
+			{
+				continue;
+			}
 
 			switch(message->type)
 			{
@@ -747,10 +896,7 @@ namespace Fortress::Network::Server
 			case eMessageType::DeltaTime:
 				break;
 			case eMessageType::DebugStateReq:
-				if (debug_state_enabled)
-				{
-					reply_debug_state(message, client_info);
-				}
+				reply_debug_state(message, client_info);
 				break;
 			default: break; // Unknown type of message
 			}
@@ -775,13 +921,9 @@ int main(int argc, char** argv)
 		&Fortress::Network::Server::Socket::receiving_message, 
 		&Fortress::Network::Server::server_socket);
 	std::thread consume_task(Fortress::Network::Server::consume_message);
-	std::thread lobby_update_task(Fortress::Network::Server::lobby_info_schedule);
-	std::thread client_purger(Fortress::Network::Server::cleanup_bad_clients);
 
 	receiving_task.detach();
 	consume_task.detach();
-	lobby_update_task.detach();
-	client_purger.detach();
 
 	Sleep(0xffffffff);
 
