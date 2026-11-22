@@ -1,6 +1,7 @@
 #pragma once
 #ifndef SCENE_HPP
 #define SCENE_HPP
+#include <algorithm>
 #include <vector>
 
 #include "camera.hpp"
