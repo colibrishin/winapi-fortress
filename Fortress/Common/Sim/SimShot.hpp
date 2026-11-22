@@ -8,6 +8,9 @@
 #include "SimData.hpp"
 #include "SimGround.hpp"
 #include "SimMath.hpp"
+#include "../MapLayout.hpp"
+
+#include <string>
 
 namespace Fortress::Sim
 {
@@ -444,14 +447,51 @@ namespace Fortress::Sim
 		return result;
 	}
 
-	// Desert map layout from Client/DesertMap.hpp.
+	// Builds the grounds of a map from Common/MapLayout.hpp. cloud_mask is
+	// the path of the cloud mask BMP (the layout's path is relative to the
+	// client's working directory). Returns false if a mask cannot be read.
+	template <size_t N>
+	bool build_map(SimWorld& world, const Map::Layout::GroundEntry (&layout)[N], const std::string& cloud_mask = {})
+	{
+		using Map::Layout::GroundShape;
+		world.grounds.clear();
+
+		for (const auto& entry : layout)
+		{
+			const Vec2 center{entry.x, entry.y};
+			const int width = static_cast<int>(entry.width);
+			const int height = static_cast<int>(entry.height);
+
+			switch (entry.shape)
+			{
+			case GroundShape::Flat:
+				world.grounds.emplace_back(center, width, height);
+				break;
+			case GroundShape::StairwayRampLeft:
+			case GroundShape::StairwayRampRight:
+				world.grounds.push_back(
+					SimGround::stairway(center, width, height, entry.shape == GroundShape::StairwayRampRight));
+				break;
+			case GroundShape::Cloud:
+			{
+				SimGround cloud(center, 1, 1);
+				if (!SimGround::from_mask_bmp(cloud_mask, center, cloud))
+				{
+					return false;
+				}
+				world.grounds.push_back(std::move(cloud));
+				break;
+			}
+			}
+		}
+
+		world.update_map_height();
+		return true;
+	}
+
 	inline void build_desert_map(SimWorld& world)
 	{
-		world.grounds.clear();
-		world.grounds.push_back(SimGround::stairway({-300.0f, 0.0f}, 500, 100, false));
-		world.grounds.emplace_back(Vec2{0.0f, 100.0f}, 500, 100);
-		world.grounds.push_back(SimGround::stairway({300.0f, 0.0f}, 500, 100, true));
-		world.update_map_height();
+		build_map(world, Map::Layout::desert);
 	}
 }
 

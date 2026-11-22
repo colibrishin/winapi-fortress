@@ -3,6 +3,7 @@
 #include "../Common/BattleScene.h"
 #include "CloudGround.hpp"
 #include "../Common/objectManager.hpp"
+#include "../Common/MapLayout.hpp"
 
 namespace Fortress::Map
 {
@@ -42,9 +43,12 @@ namespace Fortress::Map
 
 	inline void SkyValleyMap::set_grounds()
 	{
-		m_grounds.push_back(
-			ObjectBase::ObjectManager::create_object<Object::CloudGround>(
-				L"cloudy", Math::Vector2{0.0f, 0.f}));
+		for (const auto& entry : Layout::sky_valley)
+		{
+			m_grounds.push_back(
+				ObjectBase::ObjectManager::create_object<Object::CloudGround>(
+					entry.name, Math::Vector2{entry.x, entry.y}));
+		}
 	}
 }
 #endif // SKYVALLEYMAP_HPP

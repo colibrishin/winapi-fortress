@@ -1,6 +1,7 @@
 #ifndef CLOUD_HPP
 #define CLOUD_HPP
 #include "../Common/ground.hpp"
+#include "../Common/MapLayout.hpp"
 
 namespace Fortress::Object
 {
@@ -35,7 +36,7 @@ namespace Fortress::Object
 			Resource::ResourceManager::find<ImageWrapper>(L"CloudGround");
 		const auto initial_mask = 
 			Resource::ResourceManager::load<ImageWrapper>(
-			L"CloudGround Mask", "./resources/misc/tiles/cloud-mask.bmp");
+			L"CloudGround Mask", Map::Layout::cloud_mask_path);
 
 		const auto cloud = cloud_image.lock();
 		const auto cloud_mask = initial_mask.lock();
