@@ -195,6 +195,7 @@
     <ClInclude Include="Sim\SimData.hpp" />
     <ClInclude Include="Sim\SimGround.hpp" />
     <ClInclude Include="Sim\SimMath.hpp" />
+    <ClInclude Include="Sim\SimMove.hpp" />
     <ClInclude Include="Sim\SimShot.hpp" />
     <ClInclude Include="Socket.hpp" />
     <ClInclude Include="sound.hpp" />

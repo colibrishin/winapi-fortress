@@ -21,6 +21,7 @@
 
 #include "../Common/message.hpp"
 #include "../Common/Sim/SimShot.hpp"
+#include "../Common/Sim/SimMove.hpp"
 
 namespace Fortress::Network::Server
 {
@@ -34,7 +35,7 @@ namespace Fortress::Network::Server
 	{
 	public:
 		using Clock = std::chrono::steady_clock;
-		using Payload = std::variant<ShotPathMsg, ShotEventsMsg, TurnChangeMsg>;
+		using Payload = std::variant<ShotPathMsg, ShotEventsMsg, TurnChangeMsg, CharacterStateMsg>;
 
 		struct Outgoing
 		{
@@ -47,11 +48,9 @@ namespace Fortress::Network::Server
 		static constexpr float next_turn_delay_seconds = 2.0f;
 		static constexpr auto resend_interval = std::chrono::milliseconds(250);
 		static constexpr int max_resends = 40;
-		// Until the server simulates movement it takes positions from the
-		// clients, within these bounds (pixels).
-		static constexpr float max_travel_per_turn = 1300.0f;
-		static constexpr float max_idle_drift_x = 10.0f;
-		static constexpr float max_pitch = 1.3962634f;  // 80 degrees
+		static constexpr auto state_interval = std::chrono::milliseconds(50);
+		// Longest catch-up after a stall, in movement ticks.
+		static constexpr int max_ticks_per_update = 30;
 
 		RoomGame() : m_random(static_cast<unsigned>(Clock::now().time_since_epoch().count()))
 		{
@@ -84,6 +83,10 @@ namespace Fortress::Network::Server
 			std::sort(m_world.characters.begin(), m_world.characters.end(),
 				[](const auto& l, const auto& r) { return l.id < r.id; });
 
+			// Same spawn points as BattleScene::spawnpoints.
+			Sim::spawn_characters(m_world);
+			m_last_step = now;
+
 			m_active = !m_world.characters.empty();
 			if (m_active)
 			{
@@ -98,67 +101,33 @@ namespace Fortress::Network::Server
 		uint32_t turn_no() const { return m_turn_no; }
 		const Sim::SimWorld& world() const { return m_world; }
 
-		// Position reports (temporary client trust until movement moves to
-		// the server). The current player may travel up to one turn's MP;
-		// others may only fall (no horizontal change).
-		void on_position(const PlayerID pid, const Math::Vector2& position, const float facing, const float pitch)
+		// Held movement key of the current player (Sim::MoveInput values).
+		void on_move_input(const PlayerID pid, const MoveInputMsg& msg)
 		{
-			Sim::SimCharacter* ch = m_world.find(pid);
-			if (!m_active || ch == nullptr || !ch->alive || !inside_map(position))
+			if (!m_active || pid != m_current || m_phase != Phase::Aiming || msg.turn_no != m_turn_no ||
+				msg.input > static_cast<uint8_t>(Sim::MoveInput::Right))
 			{
 				return;
 			}
 
-			if (!std::isfinite(position.get_x()) || !std::isfinite(position.get_y()))
+			if (m_input_seen && msg.seq <= m_input_seq)
 			{
-				return;
+				return;  // older than the one applied
 			}
 
-			const Sim::Vec2 next{position.get_x(), position.get_y()};
-
-			if (m_known_position.count(pid) != 0)
-			{
-				const float dx = std::fabs(next.x - ch->position.x);
-				if (pid == m_current && m_phase == Phase::Aiming)
-				{
-					// Only walking counts; falls are vertical.
-					const float travel = std::fabs(next.x - ch->position.x);
-					if (m_travel[pid] + travel > max_travel_per_turn)
-					{
-						return;
-					}
-					m_travel[pid] += travel;
-				}
-				else if (dx > max_idle_drift_x)
-				{
-					return;
-				}
-			}
-
-			m_known_position.insert(pid);
-			ch->position = next;
-			ch->facing = facing < 0.0f ? -1.0f : 1.0f;
-			ch->pitch = std::isfinite(pitch) ? std::clamp(pitch, -max_pitch, max_pitch) : 0.0f;
+			m_input_seen = true;
+			m_input_seq = msg.seq;
+			m_input = static_cast<Sim::MoveInput>(msg.input);
 		}
 
-		// A client reports that its own character fell out of the map.
-		void on_death_report(const PlayerID pid)
+		// Test hook (--debug-state only): puts a character somewhere.
+		void debug_place(const PlayerID pid, const float x, const float y)
 		{
-			if (Sim::SimCharacter* ch = m_world.find(pid); m_active && ch != nullptr && ch->alive)
+			if (Sim::SimCharacter* ch = m_world.find(pid); ch != nullptr && std::isfinite(x) && std::isfinite(y))
 			{
-				ch->alive = false;
-				ch->hp = 0.0f;
-
-				const auto alive = std::count_if(m_world.characters.begin(), m_world.characters.end(),
-					[](const auto& c) { return c.alive; });
-
-				// The current player's fall ends the turn; the last but one
-				// player's fall ends the match.
-				if (m_phase == Phase::Aiming && (pid == m_current || alive <= 1))
-				{
-					m_next_turn_at = Clock::now();
-					m_phase = Phase::Replaying;
-				}
+				ch->position = {x, y};
+				ch->velocity = {};
+				ch->gravity_speed = 0.0f;
 			}
 		}
 
@@ -169,7 +138,19 @@ namespace Fortress::Network::Server
 				return;
 			}
 
-			on_position(pid, request.position, request.facing, request.pitch);
+			// Fires from where the server has the character.
+			// set_unmovable(): a walking shooter stops.
+			m_input = Sim::MoveInput::None;
+			// The client fires from Idle (not walking), facing its own way.
+			if (Sim::SimCharacter* shooter = m_world.find(pid))
+			{
+				if (shooter->state == Sim::CharacterState::Move)
+				{
+					Sim::MoveDetail::stop(*shooter);
+				}
+				shooter->state = Sim::CharacterState::Idle;
+				shooter->facing = request.facing < 0.0f ? -1.0f : 1.0f;
+			}
 
 			Sim::ShotInput input;
 			input.shooter = pid;
@@ -199,6 +180,8 @@ namespace Fortress::Network::Server
 					Sim::SimCharacter* ch = m_world.find(pid);
 					ch->hp = std::min(Sim::character_full_hp, ch->hp + 50.0f);
 					m_phase = Phase::Replaying;
+					m_input = Sim::MoveInput::None;
+					m_replay_end_at = now;
 					m_next_turn_at = now + seconds(next_turn_delay_seconds);
 					return;
 				}
@@ -214,7 +197,19 @@ namespace Fortress::Network::Server
 				input.teleport ? eProjectileType::Nutshell :
 				input.kind == Sim::ShotKind::Sub ? eProjectileType::Sub : eProjectileType::Main);
 			m_phase = Phase::Replaying;
-			m_next_turn_at = now + seconds(m_last_shot.end_tick * Sim::tick_seconds + next_turn_delay_seconds);
+			// Characters may fall once the clients' replay reaches the first
+			// crater (clients ignore positions while they replay).
+			int first_explosion = m_last_shot.end_tick;
+			for (const auto& e : m_last_shot.events)
+			{
+				if (e.type == Sim::ShotEventType::Explosion)
+				{
+					first_explosion = std::min(first_explosion, e.tick);
+				}
+			}
+			m_shot_turn = m_turn_no;
+			m_replay_end_at = now + seconds(first_explosion * Sim::tick_seconds);
+			m_next_turn_at = m_replay_end_at + seconds(next_turn_delay_seconds);
 
 			build_shot_chunks(pid);
 			for (const auto& ch : m_world.characters)
@@ -266,6 +261,14 @@ namespace Fortress::Network::Server
 				m_last_shot_send = now;
 			}
 
+			step_movement(now);
+
+			if (m_phase != Phase::Over && now - m_last_state_send >= state_interval)
+			{
+				send_state();
+				m_last_state_send = now;
+			}
+
 			const bool timed_out = m_phase == Phase::Aiming && now >= m_turn_deadline;
 			const bool shot_done = m_phase == Phase::Replaying && now >= m_next_turn_at;
 
@@ -300,23 +303,94 @@ namespace Fortress::Network::Server
 			return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(s));
 		}
 
-		bool inside_map(const Math::Vector2& p) const
+		// Runs the movement simulation in fixed ticks up to now. While a shot
+		// is being replayed on the clients nobody moves (the craters appear
+		// on their screens only when the replay reaches them).
+		void step_movement(const Clock::time_point now)
 		{
-			if (m_world.grounds.empty())
+			const auto tick = seconds(Sim::tick_seconds);
+			int steps = 0;
+
+			while (now - m_last_step >= tick)
 			{
-				return false;
+				m_last_step += tick;
+				if (++steps > max_ticks_per_update)
+				{
+					m_last_step = now;
+					break;
+				}
+
+				const bool frozen = m_phase == Phase::Replaying && m_last_step < m_replay_end_at;
+				if (frozen || m_phase == Phase::Over)
+				{
+					continue;
+				}
+
+				const bool movable = m_phase == Phase::Aiming;
+				Sim::step_world(m_world, m_current, movable ? m_input : Sim::MoveInput::None, movable);
+				m_tick++;
+				check_falls(now);
+			}
+		}
+
+		void check_falls(const Clock::time_point now)
+		{
+			int alive = 0;
+			bool fell = false;
+			bool current_died = false;
+
+			for (auto& ch : m_world.characters)
+			{
+				if (!ch.alive && ch.hp > 0.0f)
+				{
+					// Fell out of the map (step_character cleared alive).
+					ch.hp = 0.0f;
+					fell = true;
+					current_died = current_died || ch.id == m_current;
+					std::cout << "Room " << m_room << ": player " << ch.id << " fell" << std::endl;
+				}
+				alive += ch.alive ? 1 : 0;
 			}
 
-			float left = m_world.grounds.front().box().top_left().x;
-			float right = m_world.grounds.front().box().bottom_right().x;
-			for (const auto& g : m_world.grounds)
+			if (m_phase == Phase::Aiming && fell && (current_died || alive <= 1))
 			{
-				left = std::min(left, g.box().top_left().x);
-				right = std::max(right, g.box().bottom_right().x);
+				m_phase = Phase::Replaying;
+				m_input = Sim::MoveInput::None;
+				m_replay_end_at = now;
+				m_next_turn_at = now;
+			}
+		}
+
+		void send_state()
+		{
+			CharacterStateMsg msg{};
+			msg.type = eMessageType::CharacterState;
+			msg.room_id = m_room;
+			msg.player_id = -1;
+			msg.turn_no = m_turn_no;
+			msg.tick = m_tick;
+			msg.shot_turn = m_shot_turn;
+
+			for (const auto& ch : m_world.characters)
+			{
+				if (msg.count >= std::size(msg.entries)) break;
+				auto& e = msg.entries[msg.count++];
+				e.pid = ch.id;
+				e.x = ch.position.x;
+				e.y = ch.position.y;
+				e.facing = ch.facing;
+				e.pitch = std::isfinite(ch.pitch) ? ch.pitch : 0.0f;
+				e.velocity_x = ch.velocity.x;
+				e.mp = ch.mp;
+				e.moving = ch.state == Sim::CharacterState::Move;
+				e.alive = ch.alive;
 			}
 
-			return p.get_x() >= left - 200.0f && p.get_x() <= right + 200.0f &&
-				p.get_y() >= -2000.0f && p.get_y() <= m_world.map_height + Sim::out_of_bounds_margin;
+			const auto stamped = create_prewritten_network_message<CharacterStateMsg>(msg);
+			for (const auto& ch : m_world.characters)
+			{
+				m_outbox.push_back({ch.id, stamped});
+			}
 		}
 
 		int roll_wind()
@@ -354,7 +428,15 @@ namespace Fortress::Network::Server
 				ch.hits_this_turn = 0;
 			}
 
-			m_travel.clear();
+			// Round::apply_turn_change on the clients: the previous player
+			// stops and gets its mp back.
+			if (Sim::SimCharacter* previous = m_world.find(m_current))
+			{
+				Sim::finish_turn(*previous);
+			}
+
+			m_input = Sim::MoveInput::None;
+			m_input_seen = false;
 			m_pending_shot.clear();
 			m_wind = roll_wind();
 			m_phase = Phase::Aiming;
@@ -495,8 +577,15 @@ namespace Fortress::Network::Server
 		bool m_active = false;
 		Sim::SimWorld m_world;
 		std::map<PlayerID, std::vector<eItemType>> m_items;
-		std::set<PlayerID> m_known_position;
-		std::map<PlayerID, float> m_travel;
+		// Movement.
+		Sim::MoveInput m_input = Sim::MoveInput::None;
+		bool m_input_seen = false;
+		uint32_t m_input_seq = 0;
+		Clock::time_point m_last_step{};
+		Clock::time_point m_replay_end_at{};
+		Clock::time_point m_last_state_send{};
+		uint32_t m_tick = 0;
+		uint32_t m_shot_turn = 0;
 
 		uint32_t m_turn_no = 0;
 		PlayerID m_current = -1;

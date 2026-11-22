@@ -184,8 +184,7 @@ namespace Fortress::Network
 	}
 
 	void NetworkMessenger::send_shot_request(
-		const eProjectileType prj_type, const eItemType item, const float charged,
-		const Math::Vector2 position, const float facing, const float pitch)
+		const eProjectileType prj_type, const eItemType item, const float charged, const float facing)
 	{
 		ShotRequestMsg msg{};
 		msg.type = eMessageType::ShotRequest;
@@ -195,9 +194,7 @@ namespace Fortress::Network
 		msg.prj_type = prj_type;
 		msg.item = item;
 		msg.charged = charged;
-		msg.position = position;
 		msg.facing = facing;
-		msg.pitch = pitch;
 
 		m_pending_shot_request = create_prewritten_network_message<ShotRequestMsg>(msg);
 		m_shot_request_pending = true;
@@ -223,24 +220,23 @@ namespace Fortress::Network
 		}
 	}
 
-	void NetworkMessenger::send_position_report(const Math::Vector2 position, const float facing, const float pitch)
+	void NetworkMessenger::send_move_input(const uint8_t input)
 	{
-		const auto msg = create_network_message<PositionMsg>(
-			eMessageType::PositionReport, m_rood_id_, m_player_id, eObjectType::Character, position, Math::Vector2{facing, pitch});
-		m_soc.send_message<PositionMsg>(&msg, m_server_info);
-	}
-
-	void NetworkMessenger::send_own_death()
-	{
-		DestroyedMsg msg{};
-		msg.type = eMessageType::Destroyed;
+		MoveInputMsg msg{};
+		msg.type = eMessageType::MoveInput;
 		msg.room_id = m_rood_id_;
 		msg.player_id = m_player_id;
-		msg.object_type = eObjectType::Character;
-		msg.object_player_id = m_player_id;
+		msg.turn_no = m_turn_no;
+		msg.seq = ++m_move_input_seq;
+		msg.input = input;
 
-		const auto stamped = create_prewritten_network_message<DestroyedMsg>(msg);
-		m_soc.send_message<DestroyedMsg>(&stamped, m_server_info);
+		const auto stamped = create_prewritten_network_message<MoveInputMsg>(msg);
+		m_soc.send_message<MoveInputMsg>(&stamped, m_server_info);
+	}
+
+	bool NetworkMessenger::pop_character_state(CharacterStateMsg* out)
+	{
+		return pop_message<CharacterStateMsg>(eMessageType::CharacterState, -1, out, [](const CharacterStateMsg*) { return true; });
 	}
 
 	bool NetworkMessenger::pop_turn_change(TurnChangeMsg* out)

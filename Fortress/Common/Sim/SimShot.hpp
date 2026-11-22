@@ -16,6 +16,15 @@ namespace Fortress::Sim
 {
 	using PlayerID = int;
 
+	// The eCharacterState values movement needs (CharacterController).
+	enum class CharacterState : uint8_t
+	{
+		Idle,
+		Move,
+		Death,   // fell out of the map or hp <= 0; becomes Dead next tick
+		Dead,
+	};
+
 	struct SimCharacter
 	{
 		PlayerID id = 0;
@@ -26,6 +35,16 @@ namespace Fortress::Sim
 		float hp = character_full_hp;
 		bool alive = true;
 		int hits_this_turn = 0;   // previous hits for the consecutive hit bonus
+
+		// Movement (Common/Sim/SimMove.hpp). simulate_shot ignores these.
+		CharacterState state = CharacterState::Idle;
+		Vec2 velocity;                // rigidBody::m_velocity
+		float gravity_speed = 0.0f;   // rigidBody::m_gravity_speed
+		bool gravity = true;          // rigidBody::m_bGravity (on for a new character)
+		bool grounded = false;        // character::m_bGrounded
+		float mp = character_full_mp; // CharacterController::m_mp
+		bool left_held = false;       // A / D held last tick, for key down/up edges
+		bool right_held = false;
 
 		Box box() const { return {position, character_hitbox}; }
 	};

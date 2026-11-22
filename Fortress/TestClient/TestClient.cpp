@@ -339,21 +339,38 @@ namespace
 		return shot.complete();
 	}
 
-	void report_position(ScriptClient& player, const PlayerID pid, const RoomID room, const float x, const float y,
-	                     const float facing = 1.0f, const float pitch = 0.0f)
+	// Test hook: the server (with --debug-state) puts a character somewhere.
+	void place(ScriptClient& player, const RoomID room, const PlayerID target, const float x, const float y)
 	{
-		PositionMsg msg{};
-		msg.type = eMessageType::PositionReport;
+		DebugPlaceMsg msg{};
+		msg.type = eMessageType::DebugPlace;
 		msg.room_id = room;
-		msg.player_id = pid;
-		msg.object_type = eObjectType::Character;
-		msg.position = {x, y};
-		msg.offset = {facing, pitch};
+		msg.player_id = -1;
+		msg.target = target;
+		msg.x = x;
+		msg.y = y;
 		player.send(msg);
 	}
 
-	ShotRequestMsg shot_request(const RoomID room, const PlayerID pid, const uint32_t turn_no, const float x, const float y,
-	                            const float pitch, const float charge,
+	void move_input(ScriptClient& player, const PlayerID pid, const RoomID room, const uint32_t turn_no,
+	                const uint32_t seq, const uint8_t input)
+	{
+		MoveInputMsg msg{};
+		msg.type = eMessageType::MoveInput;
+		msg.room_id = room;
+		msg.player_id = pid;
+		msg.turn_no = turn_no;
+		msg.seq = seq;
+		msg.input = input;
+		player.send(msg);
+	}
+
+	const DebugStateRspMsg::Slot* slot_of(const DebugStateRspMsg& state, const PlayerID pid)
+	{
+		return find_slot(state, pid);
+	}
+
+	ShotRequestMsg shot_request(const RoomID room, const PlayerID pid, const uint32_t turn_no, const float charge,
 	                            const Fortress::eProjectileType kind = Fortress::eProjectileType::Main,
 	                            const eItemType item = eItemType::None)
 	{
@@ -365,9 +382,7 @@ namespace
 		msg.prj_type = kind;
 		msg.item = item;
 		msg.charged = charge;
-		msg.position = {x, y};
 		msg.facing = 1.0f;
-		msg.pitch = pitch;
 		return msg;
 	}
 
@@ -414,11 +429,9 @@ namespace
 		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
 
 		// Standing on the desert stairways (top surface y = -50).
-		report_position(p1, 1, room, -450.0f, -75.0f);
-		report_position(p2, 2, room, 450.0f, -75.0f, -1.0f);
 		Sleep(200);
 
-		p1.send(shot_request(room, 1, 1, -450.0f, -75.0f, 0.0f, 120.0f));
+		p1.send(shot_request(room, 1, 1, 120.0f));
 
 		ReceivedShot s1, s2;
 		if (!collect_shot(p1, 1, room, 1, s1)) return fail("p1 did not get the whole shot");
@@ -450,10 +463,10 @@ namespace
 		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
 
 		// Middle ground top is y = 50; p2 stands right in front of p1.
-		report_position(p1, 1, room, 0.0f, 25.0f, 1.0f, 0.5f);
-		report_position(p2, 2, room, 100.0f, 25.0f, -1.0f);
+		place(p1, room, 1, 0.0f, 25.0f);
+		place(p1, room, 2, 100.0f, 25.0f);
 		Sleep(200);
-		p1.send(shot_request(room, 1, 1, 0.0f, 25.0f, 0.5f, 100.0f, Fortress::eProjectileType::Sub));
+		p1.send(shot_request(room, 1, 1, 20.0f, Fortress::eProjectileType::Sub));
 
 		ReceivedShot shot;
 		if (!collect_shot(p2, 2, room, 1, shot)) return fail("p2 did not get the shot");
@@ -484,16 +497,14 @@ namespace
 
 		TurnChangeMsg turn{};
 		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
-		report_position(p1, 1, room, -450.0f, -75.0f);
-		report_position(p2, 2, room, 450.0f, -75.0f, -1.0f);
 
-		p2.send(shot_request(room, 2, 1, 450.0f, -75.0f, 0.0f, 100.0f));  // not p2's turn
-		p2.send(shot_request(room, 1, 1, -450.0f, -75.0f, 0.0f, 100.0f)); // pretends to be p1
+		p2.send(shot_request(room, 2, 1, 100.0f));  // not p2's turn
+		p2.send(shot_request(room, 1, 1, 100.0f)); // pretends to be p1
 
 		LobbyInfoMsg lobby{};
 		p3.send_header<LobbyJoinMsg>(eMessageType::LobbyJoin, -1, 3);
 		p3.wait_for<LobbyInfoMsg>(eMessageType::LobbyInfo, &lobby);
-		p3.send(shot_request(room, 3, 1, 0.0f, 0.0f, 0.0f, 100.0f));      // not in the room
+		p3.send(shot_request(room, 3, 1, 100.0f));      // not in the room
 
 		DamageMsg damage{};
 		damage.type = eMessageType::Damage;
@@ -526,10 +537,8 @@ namespace
 
 		TurnChangeMsg turn{};
 		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
-		report_position(p1, 1, room, -450.0f, -75.0f);
-		report_position(p2, 2, room, 450.0f, -75.0f, -1.0f);
 		Sleep(200);
-		p1.send(shot_request(room, 1, 1, -450.0f, -75.0f, 0.0f, 120.0f));
+		p1.send(shot_request(room, 1, 1, 120.0f));
 
 		ReceivedShot silent;
 		collect_shot(p2, 2, room, 1, silent, 1200, false);  // receive without acking
@@ -541,9 +550,9 @@ namespace
 		return true;
 	}
 
-	// A player may report only its own fall. When one player is left the
-	// match ends with that player as the winner.
-	bool scenario_death_report()
+	// Clients cannot report deaths any more; the server sees a character
+	// fall out of the map and, with one player left, ends the match.
+	bool scenario_fall_death()
 	{
 		constexpr RoomID room = 8;
 		ScriptClient p1(61091);
@@ -556,19 +565,98 @@ namespace
 		DestroyedMsg fake{};
 		fake.type = eMessageType::Destroyed;
 		fake.room_id = room;
-		fake.player_id = 2;
+		fake.player_id = 1;
 		fake.object_type = eObjectType::Character;
-		fake.object_player_id = 1;  // p2 claims p1 fell
-		p2.send(fake);
+		fake.object_player_id = 1;
+		p1.send(fake);  // ignored: the server decides falls
+		Sleep(500);
 
-		DestroyedMsg fell = fake;
-		fell.player_id = 1;
-		fell.object_player_id = 1;  // p1 reports its own fall on its own turn
-		p1.send(fell);
+		DebugStateRspMsg state{};
+		if (!p1.request_state(room, &state)) return fail("no debug state reply");
+		if (!slot_of(state, 1) || !slot_of(state, 1)->alive) return fail("a client death report was accepted");
 
-		if (!wait_turn(p2, 2, room, 2, &turn, 3000)) return fail("no TurnChange after the fall");
-		if (turn.current != -1 || turn.winner != 2) return fail("player 2 should have won (current " +
+		place(p1, room, 2, 2000.0f, -75.0f);  // nothing below
+		if (!wait_turn(p1, 1, room, 2, &turn, 15000)) return fail("no TurnChange after the fall");
+		if (turn.current != -1 || turn.winner != 1) return fail("player 1 should have won (current " +
 			std::to_string(turn.current) + ", winner " + std::to_string(turn.winner) + ")");
+
+		// After the match the server stops sending positions.
+		Sleep(200);
+		CharacterStateMsg cs{};
+		while (p1.wait_for<CharacterStateMsg>(eMessageType::CharacterState, &cs, 0)) {}
+		Sleep(500);
+		if (p1.wait_for<CharacterStateMsg>(eMessageType::CharacterState, &cs, 300))
+			return fail("CharacterState still sent after the match");
+		return true;
+	}
+
+	// Characters start where BattleScene::spawnpoints puts them.
+	bool scenario_spawn()
+	{
+		constexpr RoomID room = 10;
+		ScriptClient p1(61131);
+		ScriptClient p2(61141);
+		if (!start_match(p1, p2, room)) return false;
+		Sleep(500);
+
+		DebugStateRspMsg state{};
+		if (!p1.request_state(room, &state)) return fail("no debug state reply");
+		const auto* s1 = slot_of(state, 1);
+		const auto* s2 = slot_of(state, 2);
+		if (!s1 || !s2 || !s1->in_game || !s2->in_game) return fail("players missing from the match");
+		std::cout << "p1 (" << s1->x << ", " << s1->y << "), p2 (" << s2->x << ", " << s2->y << ")" << std::endl;
+		const bool p1_ok = std::fabs(s1->x - -400.0f) < 0.01f && std::fabs(s1->y - -75.0f) < 1.0f;
+		const bool p2_ok = std::fabs(s2->x - 275.0f) < 0.01f && std::fabs(s2->y - -75.0f) < 1.0f;
+		return (p1_ok && p2_ok) || fail("spawn positions differ from the client's");
+	}
+
+	// The current player walks with MoveInput; the other player's input and
+	// stale inputs are ignored. CharacterState reports the positions.
+	bool scenario_walk()
+	{
+		constexpr RoomID room = 11;
+		ScriptClient p1(61151);
+		ScriptClient p2(61161);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+		Sleep(300);
+
+		DebugStateRspMsg before{};
+		if (!p1.request_state(room, &before)) return fail("no debug state reply");
+
+		for (uint32_t seq = 1; seq <= 20; ++seq)
+		{
+			move_input(p1, 1, room, 1, seq, 2);  // right, repeated like the client
+			if (seq == 5)
+			{
+				move_input(p2, 2, room, 1, 100, 1);  // left from p2: not p2's turn
+			}
+			Sleep(100);
+		}
+		move_input(p1, 1, room, 1, 5, 0);   // stale (seq 5 < 20): ignored
+		Sleep(300);
+
+		DebugStateRspMsg walking{};
+		if (!p1.request_state(room, &walking)) return fail("no debug state reply");
+		move_input(p1, 1, room, 1, 21, 0);  // release
+		Sleep(500);
+		DebugStateRspMsg after{};
+		if (!p1.request_state(room, &after)) return fail("no debug state reply");
+		Sleep(300);
+		DebugStateRspMsg later{};
+		if (!p1.request_state(room, &later)) return fail("no debug state reply");
+
+		const float walked = slot_of(after, 1)->x - slot_of(before, 1)->x;
+		std::cout << "p1 walked " << walked << " px in ~2.3 s" << std::endl;
+		if (walked < 30.0f || walked > 60.0f) return fail("p1 should walk about 20 px/s");
+		if (slot_of(walking, 1)->x <= slot_of(before, 1)->x + 30.0f) return fail("stale input stopped the walk");
+		if (std::fabs(slot_of(later, 1)->x - slot_of(after, 1)->x) > 0.01f) return fail("p1 kept walking after release");
+		if (std::fabs(slot_of(after, 2)->x - slot_of(before, 2)->x) > 0.01f) return fail("p2 moved on p1's turn");
+
+		CharacterStateMsg cs{};
+		if (!p2.wait_for<CharacterStateMsg>(eMessageType::CharacterState, &cs)) return fail("no CharacterState");
 		return true;
 	}
 
@@ -699,7 +787,9 @@ namespace
 		{"direct-hit", scenario_direct_hit},
 		{"out-of-turn", scenario_out_of_turn},
 		{"shot-resend", scenario_shot_resend},
-		{"death-report", scenario_death_report},
+		{"fall-death", scenario_fall_death},
+		{"spawn", scenario_spawn},
+		{"walk", scenario_walk},
 		{"turn-timeout", scenario_turn_timeout},
 		{"smoke", scenario_smoke},
 		{"spoof-room-slot", scenario_spoof_room_slot},

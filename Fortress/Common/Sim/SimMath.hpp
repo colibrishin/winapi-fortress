@@ -7,6 +7,7 @@
 // compiles a translation unit that fails if Windows headers leak in.
 
 #include <cmath>
+#include <limits>
 
 namespace Fortress::Sim
 {
@@ -48,6 +49,9 @@ namespace Fortress::Sim
 			return {x * std::cos(radian) - y * std::sin(radian), x * std::sin(radian) + y * std::cos(radian)};
 		}
 	};
+
+	// Math::vector_inf: "nothing found" result of the ground surface queries.
+	constexpr Vec2 vector_inf = {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()};
 
 	// Axis-aligned box described like Abstract::object: position is the
 	// centre, size is the full hitbox.

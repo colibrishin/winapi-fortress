@@ -333,6 +333,11 @@ namespace Fortress::Controller
 		}
 	}
 
+	void CharacterController::set_server_mp(const float mp)
+	{
+		m_mp = mp;
+	}
+
 	void CharacterController::finish_replay()
 	{
 		if (const auto scene = Scene::SceneManager::get_active_scene().lock())

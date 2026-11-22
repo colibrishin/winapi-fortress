@@ -12,6 +12,16 @@
 
 namespace Fortress::Sim
 {
+	// Object::GroundState. Outline is never produced; kept so the values
+	// line up with the client enum.
+	enum class GroundState : uint8_t
+	{
+		NotDestroyed = 0,
+		Outline,
+		Destroyed,
+		OutOfBound,
+	};
+
 	// Destructible terrain as one byte per pixel (1 = destroyed). Replaces the
 	// per-pixel std::map of Object::Ground; the GDI mask stays client-side.
 	class SimGround
@@ -159,6 +169,123 @@ namespace Fortress::Sim
 					}
 				}
 			}
+		}
+
+		// ---- Ports of the Object::Ground queries used by character movement
+		// (Common/ground.hpp). Same names and semantics, including the
+		// static_cast<int> truncation toward zero: a local coordinate in
+		// (-1, 0) maps to pixel 0 and counts as inside the ground.
+
+		// object::to_top_left_local_position
+		Vec2 to_top_left_local_position(const Vec2& global) const
+		{
+			return global - top_left();
+		}
+
+		// Ground::safe_is_destroyed
+		GroundState safe_is_destroyed(const Vec2& local) const
+		{
+			const int x = static_cast<int>(local.x);
+			const int y = static_cast<int>(local.y);
+
+			if (in_bounds(x, y))
+			{
+				return is_destroyed(x, y) ? GroundState::Destroyed : GroundState::NotDestroyed;
+			}
+
+			return GroundState::OutOfBound;
+		}
+
+		// Ground::safe_is_object_stuck_global: all four 1-px neighbours intact.
+		bool safe_is_object_stuck_global(const Vec2& global) const
+		{
+			const Vec2 local = to_top_left_local_position(global);
+			const Vec2 offsets[4] = {{-1.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, -1.0f}, {0.0f, 1.0f}};
+
+			int count = 0;
+			for (const auto& offset : offsets)
+			{
+				count += safe_is_destroyed(local + offset) == GroundState::NotDestroyed;
+			}
+
+			return count == 4;
+		}
+
+		// Ground::safe_nearest_surface: walks up 1 px at a time to the first
+		// destroyed pixel and returns (start - found), i.e. how far to move
+		// up. If none is found before local y <= 0 it returns {0, -y} of the
+		// last probe, which is only the fractional part of the depth.
+		Vec2 safe_nearest_surface(const Vec2& global) const
+		{
+			const Vec2 origin = to_top_left_local_position(global);
+			Vec2 local = origin;
+
+			if (local.y <= 0.0f)
+			{
+				return {0.0f, -local.y};
+			}
+
+			while (local.y > 0.0f)
+			{
+				if (safe_is_destroyed(local) == GroundState::Destroyed)
+				{
+					return origin - local;
+				}
+
+				local = {local.x, local.y - 1.0f};
+			}
+
+			return {0.0f, -local.y};
+		}
+
+		// Ground::safe_orthogonal_surface_global (+ _local): first intact
+		// pixel at or below the position in its column, searching `depth`
+		// rows (-1 = to the bottom of the ground). start_y != -1 replaces
+		// the local y. Returns the offset to it, or vector_inf.
+		Vec2 safe_orthogonal_surface_global(const Vec2& global, const int depth = -1, const int start_y = -1) const
+		{
+			Vec2 local = to_top_left_local_position(global);
+
+			if (start_y != -1)
+			{
+				local = {local.x, static_cast<float>(start_y)};
+			}
+
+			const int first_y = static_cast<int>(local.y);
+			const int end_y = depth == -1 ? m_height : first_y + depth;
+
+			for (int y = first_y; y < end_y; ++y)
+			{
+				const Vec2 probe = {local.x, static_cast<float>(y)};
+
+				if (safe_is_destroyed(probe) == GroundState::NotDestroyed)
+				{
+					return probe - local;
+				}
+			}
+
+			return vector_inf;
+		}
+
+		// Ground::safe_parallel_surface_global: first intact pixel on the
+		// same row, stepping toward `left` (Math::left) or right, at most the
+		// ground width. Returns the offset to it, or vector_inf.
+		Vec2 safe_parallel_surface_global(const Vec2& global, const bool left) const
+		{
+			const Vec2 local = to_top_left_local_position(global);
+			const int step = left ? -1 : 1;
+
+			for (int i = 0; i > -m_width && i < m_width; i += step)
+			{
+				const Vec2 probe = {local.x + static_cast<float>(i), local.y};
+
+				if (safe_is_destroyed(probe) == GroundState::NotDestroyed)
+				{
+					return probe - local;
+				}
+			}
+
+			return vector_inf;
 		}
 
 		size_t destroyed_count() const

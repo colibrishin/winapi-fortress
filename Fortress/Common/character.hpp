@@ -62,6 +62,14 @@ namespace Fortress::ObjectBase
 		// server path (see projectile::start_replay).
 		ProjectilePointer spawn_replay_projectile(eProjectileType kind, unsigned int id, const GlobalPosition& position);
 		void teleport_to(const GlobalPosition& position);
+
+		// Applies the server's CharacterState. Other players follow it; the
+		// local player keeps its own prediction unless it is off by more
+		// than local_correction_distance.
+		void apply_server_state(const GlobalPosition& position, float facing, float pitch, float mp, bool moving);
+		// Prediction quality of the local player (for logs and tests).
+		int get_server_corrections() const { return m_server_corrections; }
+		float get_max_server_deviation() const { return m_max_server_deviation; }
 		virtual Network::eCharacterType get_type() const = 0;
 	private:
 		Network::PlayerID m_player_id;
@@ -69,6 +77,8 @@ namespace Fortress::ObjectBase
 
 		const std::wstring m_short_name;
 		float m_armor;
+		int m_server_corrections = 0;
+		float m_max_server_deviation = 0.0f;
 
 		void move() override;
 
