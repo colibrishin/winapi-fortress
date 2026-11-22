@@ -78,6 +78,9 @@ namespace Fortress::Controller
 		void set_server_hp(float hp);
 		void set_server_mp(float mp);
 		void finish_replay();
+		// Plays the firing animation for a shot the server simulated (the
+		// shooter's own client is already in Fire).
+		void show_fire();
 
 	protected:
 		CharacterController(

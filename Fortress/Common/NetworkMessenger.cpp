@@ -371,6 +371,20 @@ namespace Fortress::Network
 			firing->room_id == m_rood_id_;
 	}
 
+	void NetworkMessenger::send_item_signal(Math::Vector2 position, Math::Vector2 offset, unsigned int index, eItemType item)
+	{
+		const auto msg = create_network_message<ItemMsg>(
+			eMessageType::Item, m_rood_id_, m_player_id, eObjectType::Character, position, offset, index, item);
+		m_soc.send_message<ItemMsg>(&msg, m_server_info);
+	}
+
+	bool NetworkMessenger::get_item_signal(PlayerID player_id, ItemMsg* item)
+	{
+		return m_soc.find_message<ItemMsg>(eMessageType::Item, item) &&
+			item->player_id == player_id &&
+			item->room_id == m_rood_id_;
+	}
+
 	bool NetworkMessenger::check_delta_time()
 	{
 		return m_delta_time_ >= tick_rate;

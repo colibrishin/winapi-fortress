@@ -64,6 +64,8 @@ namespace Fortress::Network
 		bool get_projectile_select_signal(PlayerID player_id, ProjectileSelectMsg* projectile);
 		void send_firing_signal(Math::Vector2 position, Math::Vector2 offset);
 		bool get_firing_signal(PlayerID player_id, FiringMsg* firing);
+		void send_item_signal(Math::Vector2 position, Math::Vector2 offset, unsigned index, eItemType item);
+		bool get_item_signal(PlayerID player_id, ItemMsg* item);
 
 		template <typename T = Message>
 		void send_message(const eMessageType type, const T& pre_packed)
