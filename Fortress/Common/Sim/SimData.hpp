@@ -45,21 +45,16 @@ namespace Fortress::Sim
 	constexpr Vec2 character_hitbox = {Table::character_hitbox[0], Table::character_hitbox[1]};
 	constexpr Vec2 projectile_hitbox = {Table::projectile_hitbox[0], Table::projectile_hitbox[1]};
 
-	constexpr float character_full_hp = 100.0f;
-	constexpr float character_full_mp = 1000.0f;
-	constexpr float max_charge = 250.0f;
-	constexpr float min_charge = 10.0f;  // character::fire uses 10 when nothing was charged
+	constexpr float character_full_hp = Table::character_full_hp;
+	constexpr float character_full_mp = Table::character_full_mp;
+	constexpr float max_charge = Table::character_max_charge;
+	constexpr float min_charge = Table::character_min_charge;
+	constexpr float gravity = Table::gravity_acceleration;
 
-	constexpr float gravity = 9.80f * 1.5f;  // Math::G_ACC, px/s^2
-
-	// Projectile hit cooldown against characters (ProjectileController::is_cooldown).
-	constexpr int hit_cooldown_ticks = seconds_to_ticks(0.5f);
-	// Multi-shot interval (ProjectileTimer).
-	constexpr int multi_shot_interval_ticks = seconds_to_ticks(0.1f);
-	// Guided missile lock-on range from its leading bottom corner.
-	constexpr float guided_lock_range = 100.0f;
-	// Projectiles below map height + this are out of bounds (BattleScene::movable).
-	constexpr float out_of_bounds_margin = 500.0f;
+	constexpr int hit_cooldown_ticks = seconds_to_ticks(Table::projectile_hit_cooldown_seconds);
+	constexpr int multi_shot_interval_ticks = seconds_to_ticks(Table::multi_shot_interval_seconds);
+	constexpr float guided_lock_range = Table::guided_lock_range;
+	constexpr float out_of_bounds_margin = Table::out_of_bounds_margin;
 
 	inline const wchar_t* short_name(const CharacterType type)
 	{
@@ -77,11 +72,15 @@ namespace Fortress::Sim
 	{
 		if (kind == ShotKind::Nutshell)
 		{
-			// NutShellProjectile (Teleport item): the shooter's main speed, no
-			// damage, radius 1, one hit.
-			ProjectileSpec nutshell = projectile_spec(type, ShotKind::Main);
-			nutshell = {nutshell.speed, 0.0f, 1.0f, 0.0f, 1, 1, false};
-			return nutshell;
+			// NutShellProjectile (Teleport item) flies at the shooter's main speed.
+			return {
+				projectile_spec(type, ShotKind::Main).speed,
+				Table::nutshell_damage,
+				Table::nutshell_radius,
+				Table::nutshell_penetration,
+				Table::nutshell_hit_count,
+				Table::nutshell_fire_count,
+				false};
 		}
 
 		const auto* p = Table::find_projectile(short_name(type), kind == ShotKind::Main ? L"main" : L"sub");

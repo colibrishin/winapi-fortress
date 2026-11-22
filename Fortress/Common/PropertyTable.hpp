@@ -54,6 +54,32 @@ namespace Fortress::Object::Property::Table
 	inline constexpr float character_hitbox[2] = {50.0f, 50.0f};
 	inline constexpr float projectile_hitbox[2] = {30.0f, 30.0f};
 
+	inline constexpr float character_full_hp = 100.0f;
+	inline constexpr float character_full_mp = 1000.0f;
+	inline constexpr float character_max_charge = 250.0f;
+	// Charge used when the player fires without charging (character::fire).
+	inline constexpr float character_min_charge = 10.0f;
+
+	// Gravitational acceleration in px/s^2 (Math::G_ACC).
+	inline constexpr float gravity_acceleration = 9.80f * 1.5f;
+
+	// Nutshell (Teleport item): flies at the shooter's main projectile speed,
+	// does no damage and only marks where the shooter lands.
+	inline constexpr float nutshell_damage = 0.0f;
+	inline constexpr float nutshell_radius = 1.0f;
+	inline constexpr float nutshell_penetration = 0.0f;
+	inline constexpr int nutshell_hit_count = 1;
+	inline constexpr int nutshell_fire_count = 1;
+
+	// A projectile that already hit cannot hit a character again for this long.
+	inline constexpr float projectile_hit_cooldown_seconds = 0.5f;
+	// Interval between the projectiles of a multi-shot (ProjectileTimer).
+	inline constexpr float multi_shot_interval_seconds = 0.1f;
+	// Guided missile lock-on range from its leading bottom corner.
+	inline constexpr float guided_lock_range = 100.0f;
+	// Objects below map height + this are out of bounds (BattleScene::movable).
+	inline constexpr float out_of_bounds_margin = 500.0f;
+
 	// nullptr for unknown names (e.g. the nutshell's empty type).
 	inline const ProjectileProperty* find_projectile(const std::wstring& short_name, const std::wstring& type)
 	{

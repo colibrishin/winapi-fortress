@@ -323,7 +323,7 @@ namespace Fortress::Scene
 
 	bool BattleScene::movable(const Math::Vector2& position)
 	{
-		constexpr float epsilon = 500.0f;
+		constexpr float epsilon = Object::Property::Table::out_of_bounds_margin;
 
 		if(position.get_y() <= m_map_size.get_y() + epsilon)
 		{

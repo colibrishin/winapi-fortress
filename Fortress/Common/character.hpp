@@ -9,6 +9,7 @@
 #include "Texture.hpp"
 #include "common.h"
 #include "ProjectileTimer.hpp"
+#include "PropertyTable.hpp"
 
 // forward declaration for avoiding circular reference
 namespace Fortress
@@ -24,9 +25,9 @@ namespace Fortress::ObjectBase
 {
 	class projectile;
 
-	constexpr float character_full_hp = 100.0f;
-	constexpr float character_full_mp = 1000.0f;
-	constexpr float character_max_charge = 250.0f;
+	constexpr float character_full_hp = Object::Property::Table::character_full_hp;
+	constexpr float character_full_mp = Object::Property::Table::character_full_mp;
+	constexpr float character_max_charge = Object::Property::Table::character_max_charge;
 
 	class character : public Abstract::rigidBody, public Controller::CharacterController
 	{

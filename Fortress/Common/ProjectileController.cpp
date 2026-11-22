@@ -3,6 +3,7 @@
 
 #include "BattleScene.h"
 #include "math.h"
+#include "PropertyTable.hpp"
 #include "stateController.hpp"
 #include "GifWrapper.h"
 
@@ -93,7 +94,7 @@ namespace Fortress::Controller
 			return false;
 		}
 
-		return (m_hit_cooldown < 0.5f);
+		return (m_hit_cooldown < Object::Property::Table::projectile_hit_cooldown_seconds);
 	}
 
 	bool ProjectileController::is_exploded() const

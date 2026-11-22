@@ -9,6 +9,7 @@
 #include "../Server/ClientSide.hpp"
 #include "Check.hpp"
 #include "../Common/Sim/SimData.hpp"
+#include "../Common/math.h"
 
 #include <cwchar>
 #include <utility>
@@ -130,6 +131,20 @@ namespace
 		SimTests::check(character_armor_getter(L"missile") == 1.0f, "missile armor");
 		SimTests::check(character_armor_getter(L"secwind") == 0.7f, "secwind armor");
 		SimTests::check(projectile_damage_getter(L"cannon", L"") == 0.0f, "unknown projectile has no damage");
+
+		// Constants that were literals in character.hpp, character.cpp, math.h,
+		// NutshellProjectile.hpp, ProjectileController.cpp, ProjectileTimer.hpp,
+		// GuidedMissileProjectile.hpp and BattleScene.cpp.
+		SimTests::check(Table::character_full_hp == 100.0f && Table::character_full_mp == 1000.0f, "full hp/mp");
+		SimTests::check(Table::character_max_charge == 250.0f && Table::character_min_charge == 10.0f, "charge range");
+		SimTests::check(Table::gravity_acceleration == 9.80f * 1.5f && Fortress::Math::G_ACC == 9.80f * 1.5f, "gravity");
+		SimTests::check(Table::nutshell_damage == 0.0f && Table::nutshell_radius == 1.0f &&
+			Table::nutshell_penetration == 0.0f && Table::nutshell_hit_count == 1 && Table::nutshell_fire_count == 1,
+			"nutshell numbers");
+		SimTests::check(Table::projectile_hit_cooldown_seconds == 0.5f && Table::multi_shot_interval_seconds == 0.1f,
+			"hit cooldown and multi-shot interval");
+		SimTests::check(Table::guided_lock_range == 100.0f && Table::out_of_bounds_margin == 500.0f,
+			"guided range and out of bounds margin");
 	}
 
 	// Fortress::Sim::calculate_damage must match the server's formula for
