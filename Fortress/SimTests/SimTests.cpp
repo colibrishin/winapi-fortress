@@ -7,24 +7,17 @@
 #include <string>
 
 #include "../Server/ClientSide.hpp"
+#include "Check.hpp"
+#include "../Common/Sim/SimData.hpp"
+
+#include <cwchar>
+#include <utility>
 
 #pragma comment (lib, "Common.lib")
 
 namespace
 {
-	int g_failed = 0;
-	int g_checked = 0;
-
-	void check_near(const float actual, const float expected, const float tolerance, const std::string& what)
-	{
-		++g_checked;
-
-		if (std::fabs(actual - expected) > tolerance)
-		{
-			++g_failed;
-			std::cout << "FAIL " << what << ": expected " << expected << ", got " << actual << std::endl;
-		}
-	}
+	using SimTests::check_near;
 
 	using Fortress::eProjectileType;
 	using Fortress::Math::Vector2;
@@ -95,12 +88,106 @@ namespace
 				eProjectileType::Nutshell, 0, false, projectile_hitbox, hit_at(1.0f), near_point),
 			0.0f, 1e-3f, "nutshell does no damage");
 	}
+
+	// The numbers the client hard-coded before they moved to
+	// Common/PropertyTable.hpp (speed, radius, damage, penetration, and the
+	// hit/fire counts from the *Projectile.hpp constructors).
+	struct LegacyProjectile
+	{
+		const wchar_t* name;
+		const wchar_t* type;
+		float speed_x, speed_y, radius, damage, pen;
+		int hit_count, fire_count;
+	};
+
+	void test_property_table()
+	{
+		using namespace Fortress::Object::Property;
+
+		const LegacyProjectile legacy[] = {
+			{L"cannon", L"main", 1.0f, 2.0f, 50.0f, 10.0f, 0.9f, 1, 1},
+			{L"cannon", L"sub", 2.0f, 4.0f, 15.0f, 25.0f, 1.0f, 1, 1},
+			{L"missile", L"main", 1.5f, 3.0f, 30.0f, 10.0f, 0.9f, 2, 1},
+			{L"missile", L"sub", 1.5f, 3.0f, 10.0f, 10.0f, 0.7f, 1, 1},
+			{L"secwind", L"main", 1.5f, 3.0f, 30.0f, 30.0f, 0.7f, 1, 1},
+			{L"secwind", L"sub", 2.0f, 4.0f, 10.0f, 10.0f, 0.5f, 1, 3},
+		};
+
+		for (const auto& l : legacy)
+		{
+			const std::string what = std::string(l.name, l.name + std::wcslen(l.name)) + " " +
+				std::string(l.type, l.type + std::wcslen(l.type));
+			const auto speed = projectile_speed_getter(l.name, l.type);
+			SimTests::check(speed.get_x() == l.speed_x && speed.get_y() == l.speed_y, what + " speed");
+			SimTests::check(projectile_radius_getter(l.name, l.type) == l.radius, what + " radius");
+			SimTests::check(projectile_damage_getter(l.name, l.type) == l.damage, what + " damage");
+			SimTests::check(projectile_pen_rate_getter(l.name, l.type) == l.pen, what + " penetration");
+			SimTests::check(projectile_hit_count_getter(l.name, l.type) == l.hit_count, what + " hit count");
+			SimTests::check(projectile_fire_count_getter(l.name, l.type) == l.fire_count, what + " fire count");
+		}
+
+		SimTests::check(character_armor_getter(L"cannon") == 0.5f, "cannon armor");
+		SimTests::check(character_armor_getter(L"missile") == 1.0f, "missile armor");
+		SimTests::check(character_armor_getter(L"secwind") == 0.7f, "secwind armor");
+		SimTests::check(projectile_damage_getter(L"cannon", L"") == 0.0f, "unknown projectile has no damage");
+	}
+
+	// Fortress::Sim::calculate_damage must match the server's formula for
+	// every shooter/victim/projectile combination over a range of distances.
+	void test_sim_damage_matches_server()
+	{
+		namespace Sim = Fortress::Sim;
+
+		const std::pair<eCharacterType, Sim::CharacterType> types[] = {
+			{eCharacterType::CannonCharacter, Sim::CharacterType::Cannon},
+			{eCharacterType::MissileCharacter, Sim::CharacterType::Missile},
+			{eCharacterType::SecwindCharacter, Sim::CharacterType::Secwind},
+		};
+		const std::pair<eProjectileType, Sim::ShotKind> kinds[] = {
+			{eProjectileType::Main, Sim::ShotKind::Main},
+			{eProjectileType::Sub, Sim::ShotKind::Sub},
+		};
+
+		int mismatches = 0;
+		int compared = 0;
+
+		for (const auto& [shooter, sim_shooter] : types)
+		for (const auto& [victim, sim_victim] : types)
+		for (const auto& [kind, sim_kind] : kinds)
+		for (int hits = 0; hits < 3; ++hits)
+		for (int dd = 0; dd < 2; ++dd)
+		for (float d = 0.0f; d <= 60.0f; d += 0.75f)
+		{
+			const Vector2 hit = hit_at(d);
+			const float expected = calculate_damage(
+				shooter, victim, kind, hits, dd != 0, projectile_hitbox, hit, near_point);
+			const float actual = Sim::calculate_damage(
+				Sim::projectile_spec(sim_shooter, sim_kind), sim_victim, hits, dd != 0,
+				{hit.get_x(), hit.get_y()}, {near_point.get_x(), near_point.get_y()});
+
+			++compared;
+			if (std::fabs(expected - actual) > 1e-4f)
+			{
+				++mismatches;
+			}
+		}
+
+		SimTests::check(compared > 1000 && mismatches == 0,
+			"Sim::calculate_damage matches server (" + std::to_string(mismatches) + " of " +
+			std::to_string(compared) + " differ)");
+	}
 }
+
+void run_sim_core_tests();  // SimCoreTests.cpp
 
 int main()
 {
 	test_damage_formula();
+	test_property_table();
+	test_sim_damage_matches_server();
+	run_sim_core_tests();
 
-	std::cout << (g_checked - g_failed) << "/" << g_checked << " checks passed" << std::endl;
-	return g_failed;
+	std::cout << (SimTests::g_checked - SimTests::g_failed) << "/" << SimTests::g_checked
+		<< " checks passed" << std::endl;
+	return SimTests::g_failed;
 }

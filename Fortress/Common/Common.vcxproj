@@ -190,6 +190,11 @@
     <ClInclude Include="Round.h" />
     <ClInclude Include="scene.hpp" />
     <ClInclude Include="sceneManager.hpp" />
+    <ClInclude Include="PropertyTable.hpp" />
+    <ClInclude Include="Sim\SimData.hpp" />
+    <ClInclude Include="Sim\SimGround.hpp" />
+    <ClInclude Include="Sim\SimMath.hpp" />
+    <ClInclude Include="Sim\SimShot.hpp" />
     <ClInclude Include="Socket.hpp" />
     <ClInclude Include="sound.hpp" />
     <ClInclude Include="SoundManager.hpp" />
