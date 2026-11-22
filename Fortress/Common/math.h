@@ -7,6 +7,8 @@
 
 #include <math.h>
 
+#include "PropertyTable.hpp"
+
 namespace Fortress::Math
 {
 	/**
@@ -25,7 +27,7 @@ namespace Fortress::Math
 	 * \brief Gravitational acceleration constant
 	 */
 	constexpr float G_ACC_DEFAULT = 9.80f;
-	constexpr float G_ACC = G_ACC_DEFAULT * 1.5f;
+	constexpr float G_ACC = Object::Property::Table::gravity_acceleration;
 
 	inline float flip_radian_polarity(const float radian)
 	{

@@ -3,6 +3,7 @@
 #include <functional>
 
 #include "common.h"
+#include "PropertyTable.hpp"
 #include "Timer.hpp"
 #include "vector2.hpp"
 
@@ -15,7 +16,7 @@ namespace Fortress
 			WPARAM timer_id,
 			ProjectileInitFunction func,
 			ObjectBase::character* char_this) :
-		Timer(L"Next Projectile", 0.1f, timer_id),
+		Timer(L"Next Projectile", Object::Property::Table::multi_shot_interval_seconds, timer_id),
 		m_count(0),
 		m_curr_count(0),
 		m_func(std::move(func)),

@@ -49,7 +49,7 @@ namespace Fortress::ObjectBase
 
 		if(charged <= 0.0f)
 		{
-			charged = 10.0f;
+			charged = Object::Property::Table::character_min_charge;
 		}
 
 		Math::Vector2 angle{};

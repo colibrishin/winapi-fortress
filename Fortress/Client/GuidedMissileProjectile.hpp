@@ -66,7 +66,7 @@ namespace Fortress::Object
 		{
 			// @todo: if radius is big enough to contains shooter itself then missile is moving back and forth.
 			const auto characters = scene_ptr->is_in_range<ObjectBase::character>(
-				detection_point, 100.0f);
+				detection_point, Property::Table::guided_lock_range);
 
 			if (!characters.empty())
 			{

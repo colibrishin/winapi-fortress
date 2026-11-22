@@ -21,11 +21,11 @@ namespace Fortress::Object
 			5.0f,
 			Property::projectile_speed_getter(shooter->get_short_name(), L"main"), 
 			{}, 
-			0.0f,
-			1.0f,
-			1,
-			1,
-			0.0f)
+			Property::Table::nutshell_damage,
+			Property::Table::nutshell_radius,
+			Property::Table::nutshell_hit_count,
+			Property::Table::nutshell_fire_count,
+			Property::Table::nutshell_penetration)
 		{
 			NutShellProjectile::initialize();
 		}
