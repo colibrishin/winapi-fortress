@@ -60,6 +60,9 @@ namespace Fortress::Network::Server
 
 	static std::map<std::pair<RoomID, PlayerID>, Client> client_list = {};
 
+	// Set by --debug-state. Lets the scripted test client inspect state.
+	static bool debug_state_enabled = false;
+
 	int get_wind_acceleration(const RoomID room_id)
 	{
 		return static_cast<int>(room_wind[room_id] / 10.0f) * 10.0f;
@@ -568,6 +571,46 @@ namespace Fortress::Network::Server
 		}
 	}
 
+	void reply_debug_state(const Message* message, const sockaddr_in& client_info)
+	{
+		const RoomID room_id = message->room_id;
+		const bool is_game_room = room_id >= 0 && room_id < 15;
+
+		if (!is_game_room && room_id != -1)
+		{
+			return;
+		}
+
+		DebugStateRspMsg rsp{};
+		rsp.type = eMessageType::DebugStateRsp;
+		rsp.room_id = room_id;
+		rsp.player_id = -1;
+		rsp.wind = is_game_room ? get_wind_acceleration(room_id) : 0;
+
+		for (const auto& [key, client] : client_list)
+		{
+			if (key.first != room_id || rsp.slot_count >= std::size(rsp.slots))
+			{
+				continue;
+			}
+
+			auto& slot = rsp.slots[rsp.slot_count++];
+			slot.pid = key.second;
+			slot.address = client.ip.sin_addr.s_addr;
+			slot.port = ntohs(client.ip.sin_port);
+
+			if (is_game_room && key.second >= 0 && key.second < 15)
+			{
+				slot.turn_end = turn_end[room_id][key.second];
+				slot.double_damage = double_damage_enabled[room_id][key.second];
+				slot.hit_count = hit_count[room_id][key.second];
+			}
+		}
+
+		const auto reply = create_prewritten_network_message<DebugStateRspMsg>(rsp);
+		server_socket.send_message<DebugStateRspMsg>(&reply, client_info);
+	}
+
 	[[noreturn]] void consume_message()
 	{
 		while(true) 
@@ -703,15 +746,30 @@ namespace Fortress::Network::Server
 				break;
 			case eMessageType::DeltaTime:
 				break;
+			case eMessageType::DebugStateReq:
+				if (debug_state_enabled)
+				{
+					reply_debug_state(message, client_info);
+				}
+				break;
 			default: break; // Unknown type of message
 			}
 		}
 	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
     std::cout << "Start server...\n";
+
+	for (int i = 1; i < argc; ++i)
+	{
+		if (std::string(argv[i]) == "--debug-state")
+		{
+			Fortress::Network::Server::debug_state_enabled = true;
+			std::cout << "Debug state requests enabled\n";
+		}
+	}
 
 	std::thread receiving_task(
 		&Fortress::Network::Server::Socket::receiving_message, 

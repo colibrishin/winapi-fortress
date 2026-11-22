@@ -62,6 +62,11 @@ namespace Fortress::Network
 		ProjectileFire = 0x900,
 		ProjectileFlying = 0x901,
 		ProjectileHit = 0x902,
+
+		// Test harness only. The server answers these only when it was
+		// started with --debug-state.
+		DebugStateReq = 0xF01,
+		DebugStateRsp = 0xF02,
 	};
 
 	enum class eCharacterType
@@ -277,6 +282,29 @@ namespace Fortress::Network
 	{
 	};
 
+	struct DebugStateReqMsg : Message
+	{
+	};
+
+	// Snapshot of the server's bookkeeping for one room, used by the
+	// scripted test client to judge outcomes by state instead of logs.
+	struct DebugStateRspMsg : Message
+	{
+		struct Slot
+		{
+			PlayerID pid;
+			uint32_t address; // network byte order
+			uint16_t port;    // host byte order
+			uint8_t turn_end;
+			uint8_t double_damage;
+			int hit_count;
+		};
+
+		int wind;
+		uint8_t slot_count;
+		Slot slots[15];
+	};
+
 	union Data final
 	{
 		PingMsg ping;
@@ -335,5 +363,8 @@ namespace Fortress::Network
 	}
 	
 	constexpr unsigned int max_packet_size = sizeof(Data);
+
+	// Socket::send_message silently drops anything bigger than this.
+	static_assert(sizeof(DebugStateRspMsg) <= max_packet_size);
 }
 #endif // MESSAGE_HPP

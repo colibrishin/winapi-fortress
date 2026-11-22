@@ -218,6 +218,11 @@ namespace Fortress::Network::Server
 			m_bad_client_event.notify_all();
 		}
 
+		[[nodiscard]] u_short get_local_port() const
+		{
+			return ntohs(m_local_info.sin_port);
+		}
+
 		[[nodiscard]] bool is_message_available() const
 		{
 			return m_message_queue_.empty();
