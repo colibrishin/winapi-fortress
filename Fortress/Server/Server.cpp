@@ -624,6 +624,7 @@ namespace Fortress::Network::Server
 		case eMessageType::Position:
 		case eMessageType::Stop:
 		case eMessageType::Firing:
+		case eMessageType::Item:
 		case eMessageType::ProjectileSelect:
 		case eMessageType::ShotRequest:
 		case eMessageType::ShotAck:
@@ -789,6 +790,10 @@ namespace Fortress::Network::Server
 				break;
 			case eMessageType::Firing:
 				broadcast<FiringMsg>(message);
+				break;
+			case eMessageType::Item:
+				// Item picked (animation only; the shot request carries the item).
+				broadcast<ItemMsg>(message);
 				break;
 			case eMessageType::MoveInput:
 				room_games[message->room_id].on_move_input(message->player_id, *reinterpret_cast<const MoveInputMsg*>(message));

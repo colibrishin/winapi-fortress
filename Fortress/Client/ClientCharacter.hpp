@@ -159,9 +159,21 @@ namespace Fortress::Network::Client::Object
 
 		send_move_input();
 
-		if (is_movable_localplayer() && has_state_changed() && m_current_state_ == eCharacterState::Firing)
+		if (is_movable_localplayer() && has_state_changed())
 		{
-			send_firing();
+			if (m_current_state_ == eCharacterState::Firing)
+			{
+				send_firing();
+			}
+			else if (m_current_state_ == eCharacterState::PreItem)
+			{
+				// Others show the item animation; the shot request carries the item.
+				if (const auto item = m_active_item.lock())
+				{
+					EngineHandle::get_messenger()->send_item_signal(
+						get_position(), get_offset(), m_active_item_index, item->get_item_type());
+				}
+			}
 		}
 	}
 
@@ -170,11 +182,16 @@ namespace Fortress::Network::Client::Object
 		if(!is_localplayer())
 		{
 			FiringMsg firing_msg{};
+			ItemMsg item_msg{};
 			ProjectileSelectMsg projectile_msg{};
 
 			if (EngineHandle::get_messenger()->get_projectile_select_signal(get_player_id(), &projectile_msg))
 			{
 				m_projectile_type = projectile_msg.prj_type;
+			}
+			if (EngineHandle::get_messenger()->get_item_signal(get_player_id(), &item_msg))
+			{
+				set_item_active(item_msg.index);
 			}
 			if (EngineHandle::get_messenger()->get_firing_signal(get_player_id(), &firing_msg))
 			{

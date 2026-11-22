@@ -627,6 +627,31 @@ namespace
 		return high_ticks * 2 > low_ticks * 3 || fail("the aim angle was not applied");
 	}
 
+	// Picking an item is relayed to the other player (animation only).
+	bool scenario_item_relay()
+	{
+		constexpr RoomID room = 14;
+		ScriptClient p1(61211);
+		ScriptClient p2(61221);
+		if (!start_match(p1, p2, room)) return false;
+
+		TurnChangeMsg turn{};
+		if (!wait_turn(p1, 1, room, 1, &turn) || !wait_turn(p2, 2, room, 1, &turn)) return fail("no turn 1");
+
+		ItemMsg item{};
+		item.type = eMessageType::Item;
+		item.room_id = room;
+		item.player_id = 1;
+		item.object_type = eObjectType::Character;
+		item.index = 1;
+		item.item_type = eItemType::DoubleShot;
+		p1.send(item);
+
+		ItemMsg relayed{};
+		if (!p2.wait_for<ItemMsg>(eMessageType::Item, &relayed)) return fail("p2 did not receive p1's item pick");
+		return (relayed.player_id == 1 && relayed.index == 1) || fail("relayed item pick changed");
+	}
+
 	// Characters start where BattleScene::spawnpoints puts them.
 	bool scenario_spawn()
 	{
@@ -828,6 +853,7 @@ namespace
 		{"spawn", scenario_spawn},
 		{"walk", scenario_walk},
 		{"aim", scenario_aim},
+		{"item-relay", scenario_item_relay},
 		{"turn-timeout", scenario_turn_timeout},
 		{"smoke", scenario_smoke},
 		{"spoof-room-slot", scenario_spoof_room_slot},

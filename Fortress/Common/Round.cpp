@@ -273,6 +273,11 @@ namespace Fortress
 		{
 			current->set_unmovable();
 		}
+
+		if (const auto shooter = find_player(m_shooter))
+		{
+			shooter->show_fire();
+		}
 	}
 
 	void Round::update_replay()

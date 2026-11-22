@@ -355,6 +355,18 @@ namespace Fortress::Controller
 		m_mp = mp;
 	}
 
+	void CharacterController::show_fire()
+	{
+		const auto state = get_state();
+		if (state == eCharacterState::Dead || state == eCharacterState::Death ||
+			state == eCharacterState::Fire || state == eCharacterState::Fired)
+		{
+			return;
+		}
+
+		set_state(eCharacterState::Fire);
+	}
+
 	void CharacterController::finish_replay()
 	{
 		if (const auto scene = Scene::SceneManager::get_active_scene().lock())
