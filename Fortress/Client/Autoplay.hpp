@@ -11,6 +11,8 @@
 //   hold <key> <seconds>   keep a key pressed
 //   tap <key>              press a key for 0.15 s
 //   quit                   close the client
+//   manual                 stop the script and give the keyboard back
+//                          (Tools/play_local.ps1 uses it after the menus)
 // Keys: A-Z, 0-9, SPACE, ENTER, UP, DOWN, LEFT, RIGHT, TAB, SHIFT.
 // Example: "wait 1; tap 1; wait 1; tap ENTER; wait 2; tap SPACE"
 // FORTRESS_AUTOPLAY_LOG, if set, is a file that gets one line per step.
@@ -79,6 +81,14 @@ namespace Fortress
 				m_elapsed = 0.0f;
 				write_log("step " + std::to_string(m_current) + ": " + step.text);
 
+				if (step.kind == Step::Kind::Manual)
+				{
+					Input::disable_virtual_input();
+					m_current = m_steps.size();
+					write_log("keyboard handed back to the player");
+					return;
+				}
+
 				if (step.kind == Step::Kind::Quit)
 				{
 					PostQuitMessage(0);
@@ -114,7 +124,7 @@ namespace Fortress
 	private:
 		struct Step
 		{
-			enum class Kind { Wait, Hold, Quit } kind = Kind::Wait;
+			enum class Kind { Wait, Hold, Quit, Manual } kind = Kind::Wait;
 			eKeyCode key = eKeyCode::SPACE;
 			float seconds = 0.0f;
 			std::string text;
@@ -161,6 +171,11 @@ namespace Fortress
 			if (verb == "quit")
 			{
 				step.kind = Step::Kind::Quit;
+				return true;
+			}
+			if (verb == "manual")
+			{
+				step.kind = Step::Kind::Manual;
 				return true;
 			}
 

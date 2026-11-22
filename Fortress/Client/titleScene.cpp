@@ -1,4 +1,5 @@
 #include "titleScene.h"
+#include "../Common/KeyHelp.hpp"
 
 #include <random>
 
@@ -23,6 +24,7 @@ namespace Fortress::Scene
 	void TitleScene::update()
 	{
 		scene::update();
+		KeyHelp::update();
 
 		if (Input::getKey(eKeyCode::One))
 		{
@@ -44,6 +46,11 @@ namespace Fortress::Scene
 		}
 
 		scene::render();
+
+		KeyHelp::render({
+			L"1: \ud50c\ub808\uc774\uc5b4 1\ub85c \uc2dc\uc791",
+			L"2: \ud50c\ub808\uc774\uc5b4 2\ub85c \uc2dc\uc791",
+		});
 	}
 
 	void TitleScene::deactivate()
